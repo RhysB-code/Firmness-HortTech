@@ -1,9 +1,8 @@
 # ============================================================
-# Blackberry firmness & timing — FINAL (pub style, overwrites)
-# - Boxplots by genotype (FF / TA.XT / SUBJ) with Tukey letters
-# - Correlation "cowplots" (FF, SUBJ, TA.XT) — no title, smaller method labels
-# - Efficiency bars (time per berry) with mean labels
-# - NEW: Time ANOVA (time ~ type) + Tukey letters + time boxplots by method
+# Blackberry firmness & timing — FINAL (pub style, robust)
+# - Boxplots by genotype (FF / TA.XT / SUBJ) with Tukey letters (force)
+# - Time efficiency bars (seconds/berry) with SE + Tukey letters (robust)
+# - One-way TIME ANOVA (time ~ method) per year + assumptions + eta^2
 # - High-res PNGs saved to Desktop/Blackberry_Firmness_Exports
 # ============================================================
 
@@ -12,16 +11,19 @@ rm(list = ls()); options(stringsAsFactors = FALSE)
 # ---- Packages ----
 pkgs <- c(
   "dplyr","tidyr","ggplot2","cowplot","agricolae","stringr","readr",
-  "tibble","grid","RColorBrewer","scales","broom"
+  "tibble","grid","RColorBrewer","scales","broom","car","effectsize","rlang"
 )
 to_install <- pkgs[!pkgs %in% rownames(installed.packages())]
 if (length(to_install)) install.packages(to_install, dependencies = TRUE)
 invisible(lapply(pkgs, library, character.only = TRUE))
 
+# Prefer dplyr::recode explicitly (avoid car::recode collisions)
+recode <- dplyr::recode
+
 # ---- File paths (EDIT if needed) ----
 file_2023 <- "C:/Users/RhysB/OneDrive/Desktop/2023FirmnessData.csv"
 file_2024 <- "C:/Users/RhysB/OneDrive/Desktop/2024FirmnessData.csv"
-"C:\Users\RhysB\OneDrive\Desktop\Y1_GWAS_Collection_List.xlsx"
+
 # ---- Desktop export folder (robust to OneDrive) ----
 desktop_candidates <- c(
   file.path(Sys.getenv("USERPROFILE"), "OneDrive", "Desktop"),
@@ -53,6 +55,12 @@ read_firm <- function(path, year){
 dat23 <- read_firm(file_2023, 2023)
 dat24 <- read_firm(file_2024, 2024)
 
+# Safe printer to avoid "numeric -> grob" warnings
+safe_print <- function(p){
+  if (inherits(p, c("gg","ggplot"))) print(p)
+  invisible(NULL)
+}
+
 # ---- Robust palette for 10+ genotypes ----
 genotype_palette <- function(levels_vec){
   n <- length(levels_vec)
@@ -68,9 +76,12 @@ hsd_letters_force <- function(d) {
   if (nrow(d) == 0) return(NULL)
   fit <- aov(force ~ seln, data = d)
   out <- agricolae::HSD.test(fit, "seln", group = TRUE)$groups
-  tibble(seln = rownames(out),
-         mean = out$means %||% out$`means`,
-         letters = out$groups) %>% arrange(seln)
+  tibble(
+    seln = rownames(out),
+    # agricolae sometimes stores 'means' or `means`; either way, %||% covers it
+    mean = out$means %||% out$`means`,
+    letters = out$groups
+  ) %>% arrange(seln)
 }
 
 # Y position for force letters
@@ -99,7 +110,7 @@ theme_classic_pub <- function(base_size = 14){
     )
 }
 
-# ---- Box-and-whisker (colored; tight margins) ----
+# ---- Genotype boxplots (force) with letters ----
 plot_box_with_letters <- function(d, title, ylab,
                                   show_x_title = FALSE,
                                   show_legend  = FALSE){
@@ -134,30 +145,79 @@ plot_box_with_letters <- function(d, title, ylab,
     coord_cartesian(ylim = c(0, y_max + offset * 1.6), clip = "off")
 }
 
-# ---- Efficiency bars (time) with mean labels (bigger fonts) ----
-plot_time_bar <- function(df_year, year){
+# ---- Build Tukey labels for time (robust to agricolae variants) ----
+build_time_tukey_labels <- function(df_year){
+  df_year <- df_year %>% mutate(type = factor(tolower(type), levels = c("ff","taxt","subj")))
+  
+  # Always compute means as fallback
+  stats_means <- df_year %>%
+    group_by(type) %>%
+    summarise(avg_time = mean(time, na.rm = TRUE), .groups = "drop")
+  
+  tukey_groups <- tryCatch({
+    fit <- aov(time ~ type, data = df_year)
+    g   <- agricolae::HSD.test(fit, "type", group = TRUE)$groups
+    if (is.null(g) || nrow(g) == 0) stop("Empty HSD groups")
+    
+    # Agricolae may name the mean column after the response (e.g., 'time') or as 'means'/'mean'
+    mean_col <- if ("time"  %in% names(g)) "time"  else
+      if ("means" %in% names(g)) "means" else
+        if ("mean"  %in% names(g)) "mean"  else NA_character_
+    if (is.na(mean_col)) stop("No mean column found in HSD groups")
+    
+    g_df <- tibble::tibble(
+      type_raw     = rownames(g),
+      avg_from_hsd = as.numeric(g[[mean_col]]),
+      letters      = g[["groups"]]
+    )
+    
+    stats_means %>%
+      rename(type_raw = type) %>%
+      left_join(g_df, by = "type_raw") %>%
+      transmute(
+        type      = type_raw,
+        avg_time  = ifelse(is.na(avg_from_hsd), avg_time, avg_from_hsd),
+        letters   = letters %||% ""   # empty if missing
+      )
+  }, error = function(e){
+    # Fallback: no letters, keep means
+    stats_means %>% transmute(type = type, avg_time = avg_time, letters = "")
+  })
+  
+  tukey_groups %>%
+    mutate(type_nice = factor(dplyr::recode(as.character(type),
+                                            "ff"="FF","taxt"="TA.XT","subj"="SUBJ"),
+                              levels = c("FF","TA.XT","SUBJ")))
+}
+
+# ---- Efficiency bars (time) with mean labels + Tukey letters (robust) ----
+plot_time_bar_with_letters <- function(df_year, year){
   stats <- df_year %>%
+    mutate(type = factor(tolower(type), levels = c("ff","taxt","subj"))) %>%
     group_by(type) %>%
     summarise(
       n        = n(),
       avg_time = mean(time, na.rm = TRUE),
       sd_time  = sd(time,   na.rm = TRUE),
-      se_time  = sd_time / sqrt(n),
-      .groups = "drop"
+      se_time  = ifelse(is.na(sd_time) | n <= 1, NA_real_, sd_time / sqrt(n)),
+      .groups  = "drop"
     ) %>%
-    mutate(
-      type_nice = factor(recode(tolower(type),
-                                "ff"="FF","taxt"="TA.XT","subj"="SUBJ"),
-                         levels = c("FF","TA.XT","SUBJ"))
-    )
+    mutate(type_nice = factor(dplyr::recode(as.character(type),
+                                            "ff"="FF","taxt"="TA.XT","subj"="SUBJ"),
+                              levels = c("FF","TA.XT","SUBJ")))
   
-  y_max <- max(stats$avg_time + stats$se_time, na.rm = TRUE) * 1.05
+  labs  <- build_time_tukey_labels(df_year)
   
-  ggplot(stats, aes(x = type_nice, y = avg_time)) +
+  y_max <- max(stats$avg_time + ifelse(is.na(stats$se_time), 0, stats$se_time), na.rm = TRUE)
+  if (!is.finite(y_max)) y_max <- max(stats$avg_time, na.rm = TRUE)
+  y_max <- y_max * 1.15
+  
+  p <- ggplot(stats, aes(x = type_nice, y = avg_time)) +
     geom_col(width = 0.6, fill = "#BFD7EA", colour = "black", linewidth = 0.5) +
     geom_errorbar(aes(ymin = avg_time - se_time, ymax = avg_time + se_time),
                   width = 0.28, linewidth = 1.2, colour = "black") +
-    geom_text(aes(label = sprintf("%.1f s", avg_time), y = avg_time + se_time + 0.5),
+    geom_text(aes(label = sprintf("%.1f s", avg_time),
+                  y = avg_time + ifelse(is.na(se_time), 0, se_time) + 0.5),
               size = 5.2, fontface = "bold", hjust = 0) +
     coord_flip() +
     labs(x = "Method", y = "Seconds per berry (s)",
@@ -170,46 +230,20 @@ plot_time_bar <- function(df_year, year){
       plot.margin = margin(8, 16, 8, 8)
     ) +
     expand_limits(y = y_max)
-}
-
-# ---- Correlation panels (no main title; smaller method labels) ----
-plot_corr_pairs <- function(df_year, year, outdir, save_outputs,
-                            method_label_cex = 1.4, r_cex = 1.6){
-  # genotype means wide
-  M <- df_year %>%
-    group_by(seln, type) %>%
-    summarise(force = mean(force, na.rm = TRUE), .groups = "drop") %>%
-    tidyr::pivot_wider(names_from = type, values_from = force) %>%
-    dplyr::select(ff, subj, taxt)
   
-  if (!nrow(M) || ncol(M) < 2) return(invisible(NULL))
-  
-  panel_cor <- function(x, y){
-    usr <- par("usr"); on.exit(par(usr))
-    par(usr = c(0,1,0,1))
-    r <- suppressWarnings(cor(x, y, use = "pairwise.complete.obs"))
-    text(0.5, 0.5, paste0("R = ", sprintf("%.2f", r)),
-         cex = r_cex, font = 2)
+  # Add letters only if present and non-empty
+  if (!is.null(labs) && nrow(labs)){
+    labs_nonempty <- labs %>%
+      filter(!is.na(letters) & letters != "") %>%
+      select(type_nice, letters) %>%
+      distinct()
+    if (nrow(labs_nonempty)){
+      p <- p + geom_text(data = labs_nonempty,
+                         aes(x = type_nice, y = y_max*0.98, label = letters),
+                         size = 5.2, fontface = "bold")
+    }
   }
-  panel_pts <- function(x, y) points(x, y, pch = 19, cex = 1.2)
-  
-  # Save PNG (no main title). Method labels trimmed font size.
-  fig_file <- file.path(outdir, paste0("Fig2_Correlation_", year, ".png"))
-  if (save_outputs) {
-    if (file.exists(fig_file)) file.remove(fig_file)
-    png(fig_file, width = 1800, height = 1800, res = 200)
-    pairs(M,
-          labels = c("FruitFirm 1000","Subjective","TA.XT"),
-          lower.panel = panel_cor, upper.panel = panel_pts,
-          cex.labels = method_label_cex, font.labels = 2)
-    dev.off()
-    message("Saved: ", normalizePath(fig_file))
-  } else {
-    pairs(M,
-          labels = c("FruitFirm 1000","Subjective","TA.XT"),
-          lower.panel = panel_cor, upper.panel = panel_pts,
-          cex.labels = method_label_cex, font.labels = 2)
-  }
+  p
 }
 
 # ---- Yearly boxplot panel with legend column (centered near TA.XT) ----
@@ -237,7 +271,7 @@ assemble_year_panel <- function(df_year, year){
   
   p_subj_no_legend <- p_subj + theme(legend.position = "none")
   
-  left_stack <- plot_grid(
+  left_stack <- cowplot::plot_grid(
     p_ff, p_taxt, p_subj_no_legend,
     labels = c("a.", "b.", "c."),
     label_size = 14, label_fontface = "bold",
@@ -246,109 +280,98 @@ assemble_year_panel <- function(df_year, year){
     rel_heights = c(1.35, 1.35, 1.45)
   )
   
-  # Legend vertical nudge (you preferred 0.85)
+  # Legend vertical nudge
   legend_shift <- 0.85
-  right_column <- plot_grid(
+  right_column <- cowplot::plot_grid(
     NULL, legend_right, NULL,
     ncol = 1,
     rel_heights = c(1.35 - legend_shift, 1.35 + legend_shift, 1.45)
   )
   
-  final <- plot_grid(
+  final <- cowplot::plot_grid(
     left_stack, right_column,
     ncol = 2, rel_widths = c(6.1, 0.9), align = "h"
   )
   
-  ggdraw(final) + theme(plot.margin = margin(2, 2, 2, 2))
+  cowplot::ggdraw(final) + theme(plot.margin = margin(2, 2, 2, 2))
 }
 
-# ---- TIME ANOVA + Tukey letters + time boxplot (NEW) ----
-time_letters_positions <- function(df_year){
-  df_year %>%
-    mutate(type_nice = factor(recode(tolower(type),
-                                     "ff"="FF","taxt"="TA.XT","subj"="SUBJ"),
-                              levels = c("FF","TA.XT","SUBJ"))) %>%
-    group_by(type_nice) %>%
-    summarise(y_max = max(time, na.rm = TRUE), .groups="drop") %>%
-    mutate(y_lab = y_max + 0.06 * max(y_max, na.rm = TRUE))
-}
-
-plot_time_box_letters <- function(df_year, year){
-  if (!nrow(df_year)) return(NULL)
-  
-  fit  <- aov(time ~ type, data = df_year)
-  grp  <- agricolae::HSD.test(fit, "type", group = TRUE)$groups
-  labs <- tibble(method = rownames(grp),
-                 mean   = grp$means,
-                 letters= grp$groups) %>%
-    mutate(type_nice = recode(tolower(method),
-                              "ff"="FF","taxt"="TA.XT","subj"="SUBJ"))
-  
-  ypos <- time_letters_positions(df_year)
-  
-  dfp <- df_year %>%
-    mutate(type_nice = factor(recode(tolower(type),
-                                     "ff"="FF","taxt"="TA.XT","subj"="SUBJ"),
-                              levels = c("FF","TA.XT","SUBJ")))
-  
-  y_max  <- max(dfp$time, na.rm = TRUE)
-  offset <- 0.15 * y_max
-  
-  ggplot(dfp, aes(x = type_nice, y = time)) +
-    geom_boxplot(outlier.shape = 16, width = 0.65, size = 0.6, fatten = 2, fill = "grey90") +
-    geom_text(data = dplyr::left_join(labs, ypos, by = "type_nice"),
-              aes(x = type_nice, y = y_lab, label = letters),
-              vjust = -0.2, size = 5, fontface = "bold") +
-    labs(x = "Method", y = "Seconds per berry (s)",
-         title = paste0("Measurement Time by Method (", year, ")")) +
-    theme_classic(base_size = 16) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = 18),
-      axis.title = element_text(face = "bold", size = 16),
-      axis.text  = element_text(size = 14),
-      plot.margin = margin(6, 8, 6, 6)
-    ) +
-    expand_limits(y = y_max + offset)
-}
-
-analyze_time_anova <- function(df_year, year, outdir, save_outputs = TRUE){
+# ---- TIME ANOVA (simple) + assumptions + effect size + Tukey letters (robust export) ----
+time_anova_simple <- function(df_year, year, outdir, save_outputs = TRUE){
+  if (!nrow(df_year)) return(invisible(NULL))
   if (save_outputs && !dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
   
+  df_year <- df_year |> mutate(type = factor(tolower(type), levels = c("ff","taxt","subj")))
   fit <- aov(time ~ type, data = df_year)
+  
+  # Tidy ANOVA
   aov_tidy <- broom::tidy(fit)
   
-  aov_file <- file.path(outdir, paste0("ANOVA_Time_", year, ".csv"))
-  if (file.exists(aov_file)) file.remove(aov_file)
-  readr::write_csv(aov_tidy, aov_file)
+  # Assumption checks
+  res <- residuals(fit)
+  shapiro_p <- tryCatch(shapiro.test(res)$p.value, error = function(e) NA_real_)
+  lev_p     <- tryCatch(car::leveneTest(time ~ type, data = df_year)[["Pr(>F)"]][1], error = function(e) NA_real_)
   
-  hsd <- agricolae::HSD.test(fit, "type", group = TRUE)
-  hsd_file <- file.path(outdir, paste0("ANOVA_Time_TukeyGroups_", year, ".csv"))
-  if (file.exists(hsd_file)) file.remove(hsd_file)
-  readr::write_csv(
-    tibble::tibble(method = rownames(hsd$groups),
-                   mean   = hsd$groups$means,
-                   group  = hsd$groups$groups),
-    hsd_file
-  )
+  # Effect size (eta^2)
+  eta <- tryCatch(effectsize::eta_squared(fit, partial = FALSE), error = function(e) NULL)
   
-  p_time_box <- plot_time_box_letters(df_year, year)
-  fig_file <- file.path(outdir, paste0("Fig4_TimeBox_", year, ".png"))
-  if (file.exists(fig_file)) file.remove(fig_file)
-  ggsave(fig_file, p_time_box, width = 7.5, height = 6.2, dpi = 600)
+  # Tukey group letters (robust to column naming)
+  tukey_tbl <- tryCatch({
+    g <- agricolae::HSD.test(fit, "type", group = TRUE)$groups
+    if (is.null(g) || nrow(g) == 0) stop("Empty HSD groups")
+    mean_col <- if ("time"  %in% names(g)) "time"  else
+      if ("means" %in% names(g)) "means" else
+        if ("mean"  %in% names(g)) "mean"  else NA_character_
+    if (is.na(mean_col)) stop("No mean column in Tukey groups")
+    tibble::tibble(
+      method = rownames(g),
+      mean   = as.numeric(g[[mean_col]]),
+      group  = g[["groups"]]
+    ) %>%
+      mutate(method = dplyr::recode(tolower(method), ff = "FF", taxt = "TA.XT", subj = "SUBJ"))
+  }, error = function(e){
+    # Fallback: means by method without Tukey groups
+    df_year %>%
+      group_by(type) %>%
+      summarise(mean = mean(time, na.rm = TRUE), .groups = "drop") %>%
+      transmute(method = dplyr::recode(as.character(type),
+                                       "ff"="FF","taxt"="TA.XT","subj"="SUBJ"),
+                mean = mean,
+                group = NA_character_)
+  })
   
-  message("Saved: ", normalizePath(aov_file))
-  message("Saved: ", normalizePath(hsd_file))
-  message("Saved: ", normalizePath(fig_file))
+  # Save CSVs
+  if (save_outputs){
+    readr::write_csv(aov_tidy,   file.path(outdir, paste0("ANOVA_Time_", year, ".csv")))
+    readr::write_csv(tukey_tbl,  file.path(outdir, paste0("ANOVA_Time_TukeyGroups_", year, ".csv")))
+    readr::write_csv(
+      tibble::tibble(
+        shapiro_p = shapiro_p,
+        levene_p  = lev_p,
+        eta2      = if (!is.null(eta)) eta$Eta2[eta$Parameter == "type"] else NA_real_
+      ),
+      file.path(outdir, paste0("ANOVA_Time_Assumptions_", year, ".csv"))
+    )
+  }
   
-  print(p_time_box)
+  # Console summary (copy-paste friendly)
+  cat("\n--- Time ANOVA (", year, ") ---\n", sep = "")
+  print(aov_tidy)
+  cat("\nAssumptions: Shapiro p =", sprintf("%.4f", shapiro_p),
+      " | Levene p =", sprintf("%.4f", lev_p), "\n")
+  if (!is.null(eta)){
+    cat("Effect size (eta^2 for type):", round(eta$Eta2[eta$Parameter == "type"], 3), "\n")
+  }
+  cat("\nTukey (method means with groups):\n")
+  print(tukey_tbl)
 }
 
-# ---- Year driver (saves boxpanel, time bar, correlation) ----
+# ---- Year driver (saves boxpanel, time bar) ----
 analyze_year <- function(df_year, year, outdir, save_outputs = TRUE){
   if (save_outputs && !dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
   
   panel   <- assemble_year_panel(df_year, year)
-  p_time  <- plot_time_bar(df_year, year)
+  p_time  <- plot_time_bar_with_letters(df_year, year)
   
   f1 <- file.path(outdir, paste0("Fig1_Boxplots_", year, ".png"))
   f3 <- file.path(outdir, paste0("Fig3_TimeBar_", year, ".png"))
@@ -359,20 +382,17 @@ analyze_year <- function(df_year, year, outdir, save_outputs = TRUE){
   message("Saved: ", normalizePath(f1))
   message("Saved: ", normalizePath(f3))
   
-  # correlation panels (no title; smaller method labels)
-  plot_corr_pairs(df_year, year, outdir, save_outputs,
-                  method_label_cex = 1.4, r_cex = 1.6)
-  
-  print(panel); print(p_time)
+  safe_print(panel)
+  safe_print(p_time)
 }
 
 # ---- RUN (both years) ----
 analyze_year(dat23, 2023, outdir = out_dir, save_outputs = TRUE)
 analyze_year(dat24, 2024, outdir = out_dir, save_outputs = TRUE)
 
-# NEW: time ANOVA + Tukey + time boxplots per year
-analyze_time_anova(dat23, 2023, outdir = out_dir, save_outputs = TRUE)
-analyze_time_anova(dat24, 2024, outdir = out_dir, save_outputs = TRUE)
+# SIMPLE time ANOVA + Tukey + assumptions per year
+time_anova_simple(dat23, 2023, outdir = out_dir, save_outputs = TRUE)
+time_anova_simple(dat24, 2024, outdir = out_dir, save_outputs = TRUE)
 
 cat("\nAll files saved to:\n", normalizePath(out_dir), "\n")
 print(list.files(out_dir, full.names = TRUE))
