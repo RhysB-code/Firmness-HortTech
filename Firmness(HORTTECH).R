@@ -191,6 +191,7 @@ build_time_tukey_labels <- function(df_year){
 }
 
 # ---- Efficiency bars (time) with mean labels + Tukey letters (robust) ----
+# ---- Efficiency bars (time) with mean labels (NO Tukey letters) ----
 plot_time_bar_with_letters <- function(df_year, year){
   stats <- df_year %>%
     mutate(type = factor(tolower(type), levels = c("ff","taxt","subj"))) %>%
@@ -206,13 +207,11 @@ plot_time_bar_with_letters <- function(df_year, year){
                                             "ff"="FF","taxt"="TA.XT","subj"="SUBJ"),
                               levels = c("FF","TA.XT","SUBJ")))
   
-  labs  <- build_time_tukey_labels(df_year)
-  
   y_max <- max(stats$avg_time + ifelse(is.na(stats$se_time), 0, stats$se_time), na.rm = TRUE)
   if (!is.finite(y_max)) y_max <- max(stats$avg_time, na.rm = TRUE)
   y_max <- y_max * 1.15
   
-  p <- ggplot(stats, aes(x = type_nice, y = avg_time)) +
+  ggplot(stats, aes(x = type_nice, y = avg_time)) +
     geom_col(width = 0.6, fill = "#BFD7EA", colour = "black", linewidth = 0.5) +
     geom_errorbar(aes(ymin = avg_time - se_time, ymax = avg_time + se_time),
                   width = 0.28, linewidth = 1.2, colour = "black") +
@@ -230,6 +229,8 @@ plot_time_bar_with_letters <- function(df_year, year){
       plot.margin = margin(8, 16, 8, 8)
     ) +
     expand_limits(y = y_max)
+}
+
   
   # Add letters only if present and non-empty
   if (!is.null(labs) && nrow(labs)){
@@ -385,6 +386,18 @@ analyze_year <- function(df_year, year, outdir, save_outputs = TRUE){
   safe_print(panel)
   safe_print(p_time)
 }
+
+fit <- aov(time ~ type, data = dat23)
+aov_table <- broom::tidy(fit)  # Already loaded in your script
+
+# Print just F and p for the method factor:
+cat("2023 — F =", round(aov_table$statistic[1], 2),
+    ", p =", format(aov_table$p.value[1], digits = 3, scientific = TRUE), "\n")
+fit24 <- aov(time ~ type, data = dat24)
+aov_table24 <- broom::tidy(fit24)
+cat("2024 — F =", round(aov_table24$statistic[1], 2),
+    ", p =", format(aov_table24$p.value[1], digits = 3, scientific = TRUE), "\n")
+
 
 # ---- RUN (both years) ----
 analyze_year(dat23, 2023, outdir = out_dir, save_outputs = TRUE)
