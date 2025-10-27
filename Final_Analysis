@@ -1,99 +1,64 @@
 # =============================================================================
-# Blackberry Firmness & Timing Analysis Script — Professional Annotations
-# (subjective scale already corrected so higher = firmer)
+# Blackberry Firmness & Timing Analysis Script 
 # =============================================================================
+# Blackberry firmness data from 2023 and 2024.
+# ANOVA on firmness by genotype, ANOVA for time efficiency
+# Generates boxplots with Tukey letters, time bar charts, correlation matrices,
+# Optional for viewing: regression panels. 
+# All outputs (plots, tables, CSVs) are saved to the output directory as high-quality PNGs.
 
-rm(list = ls()); options(stringsAsFactors = FALSE)
+# Clear environment and set options
+rm(list = ls())  # Remove all objects from workspace
+options(stringsAsFactors = FALSE)  # Prevent automatic factor conversion
 
 # -------------------------------
-# Packages
+# Load Packages
 # -------------------------------
+# List of required packages for data manipulation, plotting, and stats
 pkgs <- c(
-  "dplyr","tidyr","ggplot2","cowplot","agricolae","readr",
-  "tibble","grid","RColorBrewer","scales","broom","car","effectsize","rlang"
+  "dplyr", "tidyr", "ggplot2", "cowplot", "agricolae", "readr",
+  "tibble", "grid", "RColorBrewer", "scales", "broom", "car", "effectsize", "rlang"
 )
+# Install missing packages, then load them
 to_install <- pkgs[!pkgs %in% rownames(installed.packages())]
 if (length(to_install)) install.packages(to_install, dependencies = TRUE)
 invisible(lapply(pkgs, library, character.only = TRUE))
 
-# prefer dplyr::recode and protect car::recode
+# Override recode to prefer dplyr's version and protect car::recode
 recode <- dplyr::recode
-`%||%` <- function(a,b) if (is.null(a)) b else a
+# Custom operator for null coalescing (if a is null, use b)
+`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # -------------------------------
-# Paths & Output Folder
+# Set Paths and Output Directory
 # -------------------------------
+# Hardcoded input file paths (update if needed for portability)
 file_2023 <- "C:/Users/RhysB/OneDrive/Desktop/2023FirmnessData.csv"
 file_2024 <- "C:/Users/RhysB/OneDrive/Desktop/2024FirmnessData.csv"
 
+# Find desktop path (prioritizes OneDrive if available)
 desktop_candidates <- c(
   file.path(Sys.getenv("USERPROFILE"), "OneDrive", "Desktop"),
   file.path(Sys.getenv("USERPROFILE"), "Desktop")
 )
 desktop_path <- desktop_candidates[dir.exists(desktop_candidates)][1]
+# Create output directory for all saved files
 out_dir <- file.path(desktop_path, "HortTech Visuals")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 # -------------------------------
-# Master Genotype Order & Constants
+# Constants: Genotype Levels and Palette
 # -------------------------------
+# Ordered list of genotypes (includes 2023 extras)
 MASTER_LEVELS <- c(
-  "A-2453T","A-2660T","A-2768T","A-2788T","APF-205T",
-  "APF-448T","APF-537T","APF-593T","Osage","Ponca",
-  # 2023-only extras:
-  "A-2575T","A-2615T","APF-472T","Natchez"
+  "A-2453T", "A-2660T", "A-2768T", "A-2788T", "APF-205T",
+  "APF-448T", "APF-537T", "APF-593T", "Osage", "Ponca",
+  # 2023-only extras
+  "A-2575T", "A-2615T", "APF-472T", "Natchez"
 )
 
-# -------------------------------
-# Data Reader
-# -------------------------------
-# Reads raw CSV -> standard cols -> fixes types -> FLIPS SUBJECTIVE
-# IMPORTANT:
-#   Raw subjective scale: 1 = firmest, 5 = softest.
-#   We convert to "corrected firmness" where higher = firmer:
-#        corrected = 6 - raw
-#   This yields ~1–5 but conceptually "bigger number = firmer", same direction
-#   as FruitFirm and TA.XT.
-#
-# We KEEP that corrected value in `force` so downstream is consistent.
-#
-read_firm <- function(path, year){
-  df <- read.csv(path, check.names = FALSE)
-  
-  keep <- intersect(
-    names(df),
-    c("seln","harv_no","rep","hdate","evaldate","type","time","force","meansep")
-  )
-  df <- df[, keep, drop = FALSE]
-  
-  df %>%
-    mutate(
-      seln     = factor(seln, levels = unique(seln)),
-      harv_no  = suppressWarnings(factor(harv_no)),
-      rep      = suppressWarnings(factor(rep)),
-      type     = factor(tolower(type), levels = c("ff","taxt","subj")),
-      time     = suppressWarnings(as.numeric(time)),
-      force    = suppressWarnings(as.numeric(force)),
-      year     = year
-    ) %>%
-    # flip subjective so higher = firmer
-    mutate(
-      force = if_else(tolower(type) == "subj", 6 - force, force)
-    )
-}
-
-dat23 <- read_firm(file_2023, 2023)
-dat24 <- read_firm(file_2024, 2024)
-
-safe_print <- function(p){
-  if (inherits(p, c("gg","ggplot"))) print(p)
-  invisible(NULL)
-}
-
-# -------------------------------
-# Colorblind-Safe Palette
-# -------------------------------
-genotype_palette <- function(levels_vec){
+# Function to generate colorblind-safe palette for genotypes
+genotype_palette <- function(levels_vec) {
   fixed <- c(
     "A-2453T"  = "#6C90CF",
     "A-2660T"  = "#F5E58C",
@@ -105,46 +70,63 @@ genotype_palette <- function(levels_vec){
     "APF-593T" = "#C6A54D",
     "Osage"    = "#A8A89F",
     "Ponca"    = "#B2A849",
-    # extras for 2023
+    # Extras for 2023
     "A-2575T"  = "#5B8FA8",
     "A-2615T"  = "#E7B3C6",
     "APF-472T" = "#6C90CF",
     "Natchez"  = "#E39D6D"
   )
-  
   out <- fixed[levels_vec]
-  out[is.na(out)] <- "#BBBBBB" # fallback if an unexpected seln sneaks in
+  out[is.na(out)] <- "#BBBBBB"  # Fallback color for unexpected genotypes
   out
 }
 
 # -------------------------------
-# Tukey letters + Y-offset helpers
+# Data Reading Function
 # -------------------------------
-hsd_letters_force <- function(d){
-  if (nrow(d) == 0) return(NULL)
+# Reads CSV, selects relevant columns, corrects types, and flips subjective scale
+# (Raw subjective: 1=firmest, 5=softest; corrected: higher=firmer)
+read_firm <- function(path, year) {
+  df <- read.csv(path, check.names = FALSE)  # Read CSV without name checking
   
-  fit <- aov(force ~ seln, data = d)
-  out <- agricolae::HSD.test(fit, "seln", group = TRUE)$groups
+  # Select only needed columns (keeps data consistent)
+  keep <- intersect(
+    names(df),
+    c("seln", "harv_no", "rep", "hdate", "evaldate", "type", "time", "force", "meansep")
+  )
+  df <- df[, keep, drop = FALSE]
   
-  tibble(
-    seln    = rownames(out),
-    mean    = out$means %||% out$means,
-    letters = tolower(out$groups)
-  ) %>%
-    arrange(seln)
+  df %>%
+    mutate(
+      seln     = factor(seln, levels = unique(seln)),  # Factorize genotype
+      harv_no  = suppressWarnings(factor(harv_no)),    # Factorize harvest number
+      rep      = suppressWarnings(factor(rep)),        # Factorize replicate
+      type     = factor(tolower(type), levels = c("ff", "taxt", "subj")),  # Standardize type
+      time     = suppressWarnings(as.numeric(time)),   # Numeric time
+      force    = suppressWarnings(as.numeric(force)),  # Numeric force
+      year     = year                                   # Add year column
+    ) %>%
+    # Flip subjective scale: higher = firmer (6 - raw)
+    mutate(
+      force = if_else(tolower(type) == "subj", 6 - force, force)
+    )
 }
 
-box_y_positions <- function(d){
-  d %>%
-    group_by(seln) %>%
-    summarise(y_max = max(force, na.rm = TRUE), .groups = "drop") %>%
-    mutate(y_lab = y_max + 0.12 * (max(y_max, na.rm = TRUE)))
+# Read data for both years
+dat23 <- read_firm(file_2023, 2023)
+dat24 <- read_firm(file_2024, 2024)
+
+# Safe print function (prints ggplot objects if applicable)
+safe_print <- function(p) {
+  if (inherits(p, c("gg", "ggplot"))) print(p)
+  invisible(NULL)
 }
 
 # -------------------------------
-# Themes
+# Plotting Themes
 # -------------------------------
-theme_gray_pub <- function(base_size = 14){
+# Gray theme for boxplots
+theme_gray_pub <- function(base_size = 14) {
   theme_gray(base_size = base_size) +
     theme(
       plot.title       = element_text(hjust = 0.5, face = "bold"),
@@ -154,7 +136,8 @@ theme_gray_pub <- function(base_size = 14){
     )
 }
 
-theme_classic_pub <- function(base_size = 14){
+# Classic theme for other plots
+theme_classic_pub <- function(base_size = 14) {
   theme_classic(base_size = base_size) +
     theme(
       plot.title = element_text(hjust = 0.5, face = "bold"),
@@ -163,128 +146,102 @@ theme_classic_pub <- function(base_size = 14){
 }
 
 # -------------------------------
-# Boxplot with Tukey letters
+# Tukey Letters and Boxplot Positions Helpers
 # -------------------------------
-plot_box_with_letters <- function(d,
-                                  title,
-                                  ylab,
-                                  show_x_title = FALSE,
-                                  show_legend  = FALSE){
-  
+# Compute Tukey HSD letters for ANOVA groups
+hsd_letters_force <- function(d) {
+  if (nrow(d) == 0) return(NULL)
+  fit <- aov(force ~ seln, data = d)
+  out <- agricolae::HSD.test(fit, "seln", group = TRUE)$groups
+  tibble(
+    seln    = rownames(out),
+    mean    = out$means %||% out$means,
+    letters = tolower(out$groups)
+  ) %>%
+    arrange(seln)
+}
+
+# Calculate y-positions for Tukey letters on boxplots
+box_y_positions <- function(d) {
+  d %>%
+    group_by(seln) %>%
+    summarise(y_max = max(force, na.rm = TRUE), .groups = "drop") %>%
+    mutate(y_lab = y_max + 0.12 * (max(y_max, na.rm = TRUE)))
+}
+
+# -------------------------------
+# Combined Boxplot Function (with Tukey letters)
+# -------------------------------
+plot_box_with_letters <- function(d, title, ylab, show_x_title = FALSE, show_legend = FALSE) {
   if (nrow(d) == 0) return(NULL)
   
-  letters <- hsd_letters_force(d)
-  ypos    <- box_y_positions(d)
-  lab_df  <- dplyr::left_join(letters, ypos, by = "seln")
+  letters <- hsd_letters_force(d)  # Get Tukey letters
+  ypos    <- box_y_positions(d)     # Get y positions
+  lab_df  <- left_join(letters, ypos, by = "seln")  # Merge for labels
   
-  pal_map <- setNames(genotype_palette(levels(d$seln)), levels(d$seln))
+  pal_map <- setNames(genotype_palette(levels(d$seln)), levels(d$seln))  # Color palette
   
   y_max  <- max(d$force, na.rm = TRUE)
   offset <- 0.15 * y_max
   
   ggplot(d, aes(x = seln, y = force, fill = seln)) +
     geom_boxplot(
-      outlier.shape = 16,
-      width = 0.68,
-      size = 0.7,
-      colour = "black",
-      fatten = 2
+      outlier.shape = 16, width = 0.68, size = 0.7, colour = "black", fatten = 2
     ) +
     geom_text(
-      data = lab_df,
-      aes(x = seln, y = y_lab, label = letters),
-      vjust = -0.15,
-      size = 4.8,
-      inherit.aes = FALSE
+      data = lab_df, aes(x = seln, y = y_lab, label = letters),
+      vjust = -0.15, size = 4.8, inherit.aes = FALSE
     ) +
     scale_fill_manual(values = pal_map, name = "Genotype", drop = FALSE) +
-    labs(
-      x = if (show_x_title) "Genotype" else NULL,
-      y = ylab,
-      title = title
-    ) +
-    theme_gray_pub(base_size = 14) +
+    labs(x = if (show_x_title) "Genotype" else NULL, y = ylab, title = title) +
+    theme_gray_pub() +
     theme(
       axis.text.x     = element_text(angle = 45, hjust = 1),
-      plot.margin     = margin(
-        t = 6, r = 4,
-        b = if (show_x_title) 4 else 0,
-        l = 6
-      ),
+      plot.margin     = margin(t = 6, r = 4, b = if (show_x_title) 4 else 0, l = 6),
       legend.position = if (show_legend) "right" else "none",
       legend.key.size = grid::unit(0.70, "cm"),
       legend.text     = element_text(size = 13),
       legend.title    = element_text(size = 14, face = "bold")
     ) +
-    # leave some headroom for letters
     expand_limits(y = y_max + offset) +
-    coord_cartesian(
-      ylim = c(0, y_max + offset * 1.6),
-      clip = "off"
-    )
+    coord_cartesian(ylim = c(0, y_max + offset * 1.6), clip = "off")
 }
 
 # -------------------------------
-# Time efficiency bar chart
+# Time Efficiency Bar Chart
 # -------------------------------
-plot_time_bar <- function(df_year, year){
-  
+plot_time_bar <- function(df_year, year) {
   stats <- df_year %>%
-    mutate(type = factor(tolower(type), levels = c("ff","taxt","subj"))) %>%
+    mutate(type = factor(tolower(type), levels = c("ff", "taxt", "subj"))) %>%
     group_by(type) %>%
     summarise(
       n        = n(),
       avg_time = mean(time, na.rm = TRUE),
-      sd_time  = sd(time,   na.rm = TRUE),
-      se_time  = ifelse(is.na(sd_time) | n <= 1,
-                        NA_real_,
-                        sd_time / sqrt(n)),
+      sd_time  = sd(time, na.rm = TRUE),
+      se_time  = ifelse(is.na(sd_time) | n <= 1, NA_real_, sd_time / sqrt(n)),
       .groups  = "drop"
     ) %>%
     mutate(type_nice = factor(
-      recode(as.character(type),
-             "ff"   = "FF",
-             "taxt" = "TA.XT",
-             "subj" = "SUBJ"),
-      levels = c("FF","TA.XT","SUBJ"))
-    )
+      recode(as.character(type), "ff" = "FF", "taxt" = "TA.XT", "subj" = "SUBJ"),
+      levels = c("FF", "TA.XT", "SUBJ")
+    ))
   
-  y_max <- max(
-    stats$avg_time + ifelse(is.na(stats$se_time), 0, stats$se_time),
-    na.rm = TRUE
-  )
+  y_max <- max(stats$avg_time + ifelse(is.na(stats$se_time), 0, stats$se_time), na.rm = TRUE)
   if (!is.finite(y_max)) y_max <- max(stats$avg_time, na.rm = TRUE)
   y_max <- y_max * 1.15
   
   ggplot(stats, aes(x = type_nice, y = avg_time)) +
-    geom_col(
-      width   = 0.6,
-      fill    = "#BFD7EA",
-      colour  = "black",
-      linewidth = 0.6
-    ) +
+    geom_col(width = 0.6, fill = "#BFD7EA", colour = "black", linewidth = 0.6) +
     geom_errorbar(
-      aes(ymin = avg_time - se_time,
-          ymax = avg_time + se_time),
-      width = 0.28,
-      linewidth = 1.2,
-      colour = "black"
+      aes(ymin = avg_time - se_time, ymax = avg_time + se_time),
+      width = 0.28, linewidth = 1.2, colour = "black"
     ) +
     geom_text(
-      aes(
-        label = sprintf("%.1f s", avg_time),
-        y     = avg_time + ifelse(is.na(se_time), 0, se_time) + 0.5
-      ),
-      size = 5.2,
-      fontface = "bold",
-      hjust = 0
+      aes(label = sprintf("%.1f s", avg_time), y = avg_time + ifelse(is.na(se_time), 0, se_time) + 0.5),
+      size = 5.2, fontface = "bold", hjust = 0
     ) +
     coord_flip() +
-    labs(
-      x = "Method",
-      y = "Time per fruit (s)",
-      title = paste0("Efficiency by Method (", year, ")")
-    ) +
+    labs(x = "Method", y = "Time per fruit (s)", title = paste0("Efficiency by Method (", year, ")")) +
     theme_classic_pub(base_size = 16) +
     theme(
       plot.title = element_text(hjust = 0.5, face = "bold", size = 20),
@@ -296,22 +253,21 @@ plot_time_bar <- function(df_year, year){
 }
 
 # -------------------------------
-# Correlation matrix (base R pairs)
+# Correlation Matrix (Base R Pairs)
 # -------------------------------
-# NOTE: because we already flipped subjective in read_firm(),
-# `force` is already on the "higher = firmer" scale for type == "subj".
-# So we can just use means of force directly. No need for subj_rev now.
-plot_correlations_base <- function(df_year, year){
-  
+# -------------------------------
+# Correlation Matrix (Base R Pairs)
+# -------------------------------
+plot_correlations_base <- function(df_year, year) {
   if (!nrow(df_year)) return(invisible(NULL))
   
   df <- df_year %>%
-    mutate(type = factor(tolower(type), levels = c("ff","taxt","subj"))) %>%
-    filter(type %in% c("ff","taxt","subj")) %>%
+    mutate(type = factor(tolower(type), levels = c("ff", "taxt", "subj"))) %>%
+    filter(type %in% c("ff", "taxt", "subj")) %>%
     group_by(seln, type) %>%
     summarise(m = mean(force, na.rm = TRUE), .groups = "drop") %>%
-    tidyr::pivot_wider(names_from = type, values_from = m) %>%
-    dplyr::select(ff, subj, taxt)
+    pivot_wider(names_from = type, values_from = m) %>%
+    select(ff, subj, taxt)
   
   cc <- complete.cases(df)
   if (sum(cc) < 2) {
@@ -321,7 +277,7 @@ plot_correlations_base <- function(df_year, year){
   }
   wide <- df[cc, , drop = FALSE]
   
-  panel.cor <- function(x, y, digits = 2, cex.cor = 1.0, ...){
+  panel.cor <- function(x, y, digits = 2, cex.cor = 1.0, ...) {
     old_usr <- par("usr"); on.exit(par(usr = old_usr), add = TRUE)
     par(usr = c(0, 1, 0, 1))
     r <- suppressWarnings(cor(x, y, use = "complete.obs"))
@@ -329,32 +285,21 @@ plot_correlations_base <- function(df_year, year){
     text(0.5, 0.5, txt, cex = 1.8 * cex.cor, font = 2)
   }
   
-  panel.smooth.lm <- function(x, y,
-                              pch = 19,
-                              cex = 0.9,
-                              col.smooth = "black", ...){
+  panel.smooth.lm <- function(x, y, pch = 19, cex = 0.9, col.smooth = "black", ...) {
     points(x, y, pch = pch, cex = cex, ...)
     ok <- is.finite(x) & is.finite(y)
     if (any(ok)) abline(lm(y[ok] ~ x[ok]), col = col.smooth, lwd = 2)
   }
   
-  par(
-    bg  = "white",
-    fg  = "black",
-    mar = c(5.2, 5.2, 3.5, 1.5),
-    oma = c(0, 0, 2, 0),
-    las = 1
-  )
-  
+  # ↓↓↓ ADJUSTED TEXT SIZE ↓↓↓
+  par(bg = "white", fg = "black", mar = c(5.2, 5.2, 3.5, 1.5), oma = c(0, 0, 2, 0), las = 1)
   pairs(
     wide,
     lower.panel = panel.cor,
     upper.panel = panel.smooth.lm,
     diag.panel  = NULL,
-    labels      = c("FruitFirm 1000",
-                    "Subjective (corrected)",
-                    "TA.XT Plus"),
-    cex.labels  = 1.8,
+    labels      = c("FruitFirm 1000 (g·mm⁻¹)", "Subjective (1–5)", "TA.XT Plus (g)"),
+    cex.labels  = 1.3,    # ↓ smaller label text
     font.labels = 2,
     main        = paste0("Correlations among firmness methods (", year, ")")
   )
@@ -362,378 +307,175 @@ plot_correlations_base <- function(df_year, year){
   invisible(NULL)
 }
 
+
 # -------------------------------
-# Assemble 3-panel boxplot figure
+# Assemble 3-Panel Boxplot Figure
 # -------------------------------
-assemble_year_panel <- function(df_year, year){
-  
+assemble_year_panel <- function(df_year, year) {
   ff   <- df_year %>% filter(type == "ff")
   taxt <- df_year %>% filter(type == "taxt")
   subj <- df_year %>% filter(type == "subj")
   
-  p_ff <- plot_box_with_letters(
-    ff,
-    paste0("FruitFirm® 1000 (", year, ")"),
-    "Firmness (g·mm⁻¹)",
-    FALSE,
-    FALSE
-  )
+  p_ff <- plot_box_with_letters(ff, paste0("FruitFirm® 1000 (", year, ")"), "Firmness (g·mm⁻¹)", FALSE, FALSE)
+  p_taxt <- plot_box_with_letters(taxt, paste0("TA.XT Plus (", year, ")"), "Peak force (g)", FALSE, FALSE)
+  p_subj <- plot_box_with_letters(subj, paste0("Subjective (", year, ")"), "Firmness rating (1-5)", TRUE, TRUE)
   
-  p_taxt <- plot_box_with_letters(
-    taxt,
-    paste0("TA.XT Plus (", year, ")"),
-    "Peak force (g)",
-    FALSE,
-    FALSE
-  )
-  
-  # Subjective is already corrected (higher = firmer).
-  # Keep y label explicit so reviewers get it.
-  p_subj <- plot_box_with_letters(
-    subj,
-    paste0("Subjective (", year, ")"),
-    "Firmness rating (1-5)",
-    TRUE,
-    TRUE
-  )
-  
-  legend_right <- cowplot::get_legend(
-    p_subj +
-      theme(
-        legend.position   = "right",
-        legend.box.margin = margin(2, 2, 2, 2),
-        legend.key.size   = grid::unit(0.70, "cm"),
-        legend.text       = element_text(size = 13),
-        legend.title      = element_text(size = 14, face = "bold")
-      )
-  )
+  legend_right <- get_legend(p_subj + theme(legend.position = "right", legend.box.margin = margin(2, 2, 2, 2), legend.key.size = grid::unit(0.70, "cm"), legend.text = element_text(size = 13), legend.title = element_text(size = 14, face = "bold")))
   
   p_subj_no_legend <- p_subj + theme(legend.position = "none")
   
-  left_stack <- cowplot::plot_grid(
-    p_ff, p_taxt, p_subj_no_legend,
-    labels = c("a.","b.","c."),
-    label_size = 14,
-    label_fontface = "bold",
-    ncol = 1,
-    align = "v",
-    axis = "l",
-    label_x = 0.07,
-    label_y = 0.98,
-    label_hjust = 0,
-    rel_heights = c(1.35, 1.35, 1.45)
-  )
+  left_stack <- plot_grid(p_ff, p_taxt, p_subj_no_legend, labels = c("a.", "b.", "c."), label_size = 14, label_fontface = "bold", ncol = 1, align = "v", axis = "l", label_x = 0.07, label_y = 0.98, label_hjust = 0, rel_heights = c(1.35, 1.35, 1.45))
   
-  right_column <- cowplot::plot_grid(
-    NULL, legend_right, NULL,
-    ncol = 1,
-    rel_heights = c(0.15, 1.25, 0.60)
-  )
+  right_column <- plot_grid(NULL, legend_right, NULL, ncol = 1, rel_heights = c(0.15, 1.25, 0.60))
   
-  final <- cowplot::plot_grid(
-    left_stack, right_column,
-    ncol = 2,
-    rel_widths = c(6.4, 1.0),
-    align = "h"
-  )
+  final <- plot_grid(left_stack, right_column, ncol = 2, rel_widths = c(6.4, 1.0), align = "h")
   
-  cowplot::ggdraw(final) +
-    theme(plot.margin = margin(10, 10, 10, 10))
+  ggdraw(final) + theme(plot.margin = margin(10, 10, 10, 10))
 }
 
 # -------------------------------
-# Time ANOVA (simple export)
+# Time ANOVA and Export
 # -------------------------------
-time_anova_simple <- function(df_year, year, outdir, save_outputs = TRUE){
+time_anova_simple <- function(df_year, year, outdir, save_outputs = TRUE) {
+  if (!nrow(df_year)) return(invisible(NULL))  # Skip if no data
+  if (save_outputs && !dir.exists(outdir)) dir.create(outdir, recursive = TRUE)  # Ensure output dir exists
   
-  if (!nrow(df_year)) return(invisible(NULL))
-  if (save_outputs && !dir.exists(outdir))
-    dir.create(outdir, recursive = TRUE)
+  df_year <- df_year %>% mutate(type = factor(tolower(type), levels = c("ff", "taxt", "subj")))  # Standardize type factor
   
-  df_year <- df_year %>%
-    mutate(type = factor(tolower(type), levels = c("ff","taxt","subj")))
+  fit <- aov(time ~ type, data = df_year)  # Fit ANOVA model for time by method
+  aov_tidy <- broom::tidy(fit)  # Tidy ANOVA results
   
-  fit <- aov(time ~ type, data = df_year)
+  res       <- residuals(fit)  # Get residuals for assumption checks
+  shapiro_p <- tryCatch(shapiro.test(res)$p.value, error = function(e) NA_real_)  # Shapiro-Wilk normality test
+  lev_p     <- tryCatch(car::leveneTest(time ~ type, data = df_year)[["Pr(>F)"]][1], error = function(e) NA_real_)  # Levene's homogeneity test
+  eta <- tryCatch(effectsize::eta_squared(fit, partial = FALSE), error = function(e) NULL)  # Effect size (eta squared)
   
-  aov_tidy <- broom::tidy(fit)
-  
-  res       <- residuals(fit)
-  shapiro_p <- tryCatch(shapiro.test(res)$p.value,
-                        error = function(e) NA_real_)
-  lev_p     <- tryCatch(
-    car::leveneTest(time ~ type, data = df_year)[["Pr(>F)"]][1],
-    error = function(e) NA_real_
-  )
-  eta <- tryCatch(
-    effectsize::eta_squared(fit, partial = FALSE),
-    error = function(e) NULL
-  )
-  
-  if (save_outputs){
-    readr::write_csv(
-      aov_tidy,
-      file.path(outdir, paste0("ANOVA_Time_", year, ".csv"))
-    )
-    
-    readr::write_csv(
-      tibble::tibble(
-        shapiro_p = shapiro_p,
-        levene_p  = lev_p,
-        eta2      = if (!is.null(eta))
-          eta$Eta2[eta$Parameter == "type"] else NA_real_
-      ),
+  if (save_outputs) {  # Save results to CSVs if requested
+    write_csv(aov_tidy, file.path(outdir, paste0("ANOVA_Time_", year, ".csv")))  # ANOVA table
+    write_csv(
+      tibble(shapiro_p = shapiro_p, levene_p = lev_p, eta2 = if (!is.null(eta)) eta$Eta2[eta$Parameter == "type"] else NA_real_),  # Assumptions and effect size
       file.path(outdir, paste0("ANOVA_Time_Assumptions_", year, ".csv"))
     )
   }
   
-  cat("\n--- Time ANOVA (", year, ") ---\n", sep = "")
+  cat("\n--- Time ANOVA (", year, ") ---\n", sep = "")  # Print to console
   print(aov_tidy)
 }
 
 # -------------------------------
-# Year runner: make & save figs
+# Analyze Year: Generate and Save All Plots for a Year
 # -------------------------------
-analyze_year <- function(df_year, year, outdir){
+analyze_year <- function(df_year, year, outdir) {
+  if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)  # Ensure output dir
   
-  if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
+  # 3-panel boxplot figure
+  panel <- assemble_year_panel(df_year, year)  # Assemble the multi-panel plot
+  safe_print(panel)  # Print to console/viewer
+  f1 <- file.path(outdir, paste0("Figure_", year, "_Firmness_Boxplots.png"))  # Output file path
+  ggsave(filename = f1, plot = panel, width = 15, height = 11.5, dpi = 600, bg = "white")  # Save high-res PNG
+  message("Saved: ", normalizePath(f1))  # Confirm save
   
-  # Panel of 3 boxplots
-  panel <- assemble_year_panel(df_year, year)
-  safe_print(panel)
-  f1 <- file.path(outdir, paste0("Figure_", year, "_Firmness_Boxplots.png"))
-  ggsave(
-    filename = f1,
-    plot     = panel,
-    width    = 15,
-    height   = 11.5,
-    dpi      = 600,
-    bg       = "white"
-  )
-  message("Saved: ", normalizePath(f1))
+  # Time efficiency bar chart
+  p_time <- plot_time_bar(df_year, year)  # Generate bar chart
+  safe_print(p_time)  # Print to console
+  f2 <- file.path(outdir, paste0("Figure_", year, "_Time_Per_Fruit.png"))  # Output file path
+  ggsave(filename = f2, plot = p_time, width = 10.5, height = 7.5, dpi = 600, bg = "white")  # Save PNG
+  message("Saved: ", normalizePath(f2))  # Confirm save
   
-  # Time-per-fruit bar chart
-  p_time <- plot_time_bar(df_year, year)
-  safe_print(p_time)
-  f2 <- file.path(outdir, paste0("Figure_", year, "_Time_Per_Fruit.png"))
-  ggsave(
-    filename = f2,
-    plot     = p_time,
-    width    = 10.5,
-    height   = 7.5,
-    dpi      = 600,
-    bg       = "white"
-  )
-  message("Saved: ", normalizePath(f2))
-  
-  # Correlations matrix
-  plot_correlations_base(df_year, year)
-  f3 <- file.path(outdir, paste0("Figure_", year, "_Correlations.png"))
-  png(filename = f3, width = 2100, height = 1500, res = 300, bg = "white")
-  plot_correlations_base(df_year, year)
-  invisible(dev.off())
-  message("Saved: ", normalizePath(f3))
+  # Correlation matrix (base R pairs plot)
+  plot_correlations_base(df_year, year)  # Generate and display plot
+  f3 <- file.path(outdir, paste0("Figure_", year, "_Correlations.png"))  # Output file path
+  png(filename = f3, width = 2100, height = 1500, res = 300, bg = "white")  # Open PNG device
+  plot_correlations_base(df_year, year)  # Redraw for saving
+  invisible(dev.off())  # Close device
+  message("Saved: ", normalizePath(f3))  # Confirm save
 }
 
 # -------------------------------
-# Genotype ANOVA, diagnostics, effect size (force ~ seln)
+# Prepare Wide Data for Regressions (Means by Genotype and Type)
 # -------------------------------
-fit23 <- aov(force ~ seln, data = dat23)
-fit24 <- aov(force ~ seln, data = dat24)
-
-summary(fit23)
-summary(fit24)
-
-shapiro23 <- shapiro.test(residuals(fit23))
-shapiro24 <- shapiro.test(residuals(fit24))
-
-levene23 <- car::leveneTest(force ~ seln, data = dat23)
-levene24 <- car::leveneTest(force ~ seln, data = dat24)
-
-eta23 <- effectsize::eta_squared(fit23, partial = FALSE)
-eta24 <- effectsize::eta_squared(fit24, partial = FALSE)
-
-cat("\n--- 2023 Firmness ANOVA ---\n")
-print(summary(fit23))
-cat("\nShapiro–Wilk p =", shapiro23$p.value)
-cat("\nLevene’s Test p =", levene23[1, "Pr(>F)"])
-print(eta23)
-
-cat("\n\n--- 2024 Firmness ANOVA ---\n")
-print(summary(fit24))
-cat("\nShapiro–Wilk p =", shapiro24$p.value)
-cat("\nLevene’s Test p =", levene24[1, "Pr(>F)"])
-print(eta24)
-
-# -------------------------------
-# Helper: prep_wide for regression panels
-# -------------------------------
-# Because subjective is ALREADY corrected in dat23/dat24,
-# we do NOT need to make subj_rev here. We just rename for clarity.
-prep_wide <- function(df_year){
-  
-  wide <- df_year %>%
-    mutate(type = factor(tolower(type), levels = c("ff","taxt","subj"))) %>%
-    group_by(seln, type) %>%
-    summarise(m = mean(force, na.rm = TRUE), .groups = "drop") %>%
-    tidyr::pivot_wider(names_from = type, values_from = m) %>%
-    # rename subj column to subj_corrected for clarity in plots
-    dplyr::rename(subj_corrected = subj) %>%
-    dplyr::select(seln, ff, taxt, subj_corrected)
-  
-  wide
+prep_wide <- function(df_year) {
+  df_year %>%
+    mutate(type = factor(tolower(type), levels = c("ff", "taxt", "subj"))) %>%  # Standardize type
+    group_by(seln, type) %>%  # Group by genotype and method
+    summarise(m = mean(force, na.rm = TRUE), .groups = "drop") %>%  # Mean firmness
+    pivot_wider(names_from = type, values_from = m) %>%  # Widen to columns: ff, taxt, subj
+    rename(subj_corrected = subj) %>%  # Rename for clarity (already corrected)
+    select(seln, ff, taxt, subj_corrected)  # Select relevant columns
 }
 
-wide23 <- prep_wide(dat23)
-wide24 <- prep_wide(dat24)
-
 # -------------------------------
-# Regression panel helper
+# Regression Plot Function (Single Panel)
 # -------------------------------
-plot_regression <- function(df, xcol, ycol, xlab, ylab, panel_label){
+plot_regression <- function(df, xcol, ycol, xlab, ylab, panel_label) {
+  df_sub <- df %>% select(all_of(c(xcol, ycol))) %>% na.omit()  # Subset and remove NAs
   
-  df_sub <- df %>%
-    dplyr::select(all_of(c(xcol, ycol))) %>%
-    stats::na.omit()
+  fit <- lm(reformulate(xcol, ycol), data = df_sub)  # Fit linear model
+  r2  <- summary(fit)$r.squared  # R-squared
+  r   <- cor(df_sub[[xcol]], df_sub[[ycol]])  # Correlation coefficient
+  p   <- cor.test(df_sub[[xcol]], df_sub[[ycol]])$p.value  # P-value
   
-  fit <- lm(reformulate(xcol, ycol), data = df_sub)
-  r2  <- summary(fit)$r.squared
-  r   <- cor(df_sub[[xcol]], df_sub[[ycol]])
-  p   <- cor.test(df_sub[[xcol]], df_sub[[ycol]])$p.value
-  
-  ggplot(df_sub, aes_string(x = xcol, y = ycol)) +
-    geom_point(
-      size  = 3,
-      shape = 21,
-      fill  = "#BFD7EA",
-      color = "black",
-      stroke = 0.7
-    ) +
-    geom_smooth(
-      method = "lm",
-      se = TRUE,
-      color = "black",
-      linewidth = 0.8
-    ) +
-    labs(
-      x = xlab,
-      y = ylab,
-      title = sprintf(
-        "%s  R = %.2f, R² = %.2f, p = %.3f",
-        panel_label, r, r2, p
-      )
-    ) +
+  ggplot(df_sub, aes_string(x = xcol, y = ycol)) +  # Plot scatter with regression
+    geom_point(size = 3, shape = 21, fill = "#BFD7EA", color = "black", stroke = 0.7) +
+    geom_smooth(method = "lm", se = TRUE, color = "black", linewidth = 0.8) +
+    labs(x = xlab, y = ylab, title = sprintf("%s  R = %.2f, R² = %.2f, p = %.3f", panel_label, r, r2, p)) +
     theme_classic(base_size = 14) +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.5),
-      axis.title = element_text(face = "bold")
-    )
+    theme(plot.title = element_text(face = "bold", hjust = 0.5), axis.title = element_text(face = "bold"))
 }
 
 # -------------------------------
-# Build regression panel figs
+# Generate and Save Regression Panels for a Year
 # -------------------------------
-# 2023 panels
-p23_ff_taxt <- plot_regression(
-  wide23,
-  xcol = "ff",
-  ycol = "taxt",
-  xlab = "FruitFirm® 1000 (g·mm⁻¹)",
-  ylab = "TA.XT Plus (g)",
-  panel_label = "a."
-)
-
-p23_ff_subj <- plot_regression(
-  wide23,
-  xcol = "ff",
-  ycol = "subj_corrected",
-  xlab = "FruitFirm® 1000 (g·mm⁻¹)",
-  ylab = "Subjective rating (1-5)",
-  panel_label = "b."
-)
-
-p23_taxt_subj <- plot_regression(
-  wide23,
-  xcol = "taxt",
-  ycol = "subj_corrected",
-  xlab = "TA.XT Plus (g)",
-  ylab = "Subjective rating (1-5)",
-  panel_label = "c."
-)
-
-regression_grid_2023 <- cowplot::plot_grid(
-  p23_ff_taxt,
-  p23_ff_subj,
-  p23_taxt_subj,
-  nrow = 1,
-  labels = NULL,
-  rel_widths = c(1,1,1)
-)
-print(regression_grid_2023)
-
-ggsave(
-  filename = file.path(out_dir, "Figure_2023_RegressionPanels.png"),
-  plot     = regression_grid_2023,
-  width    = 15,
-  height   = 5.5,
-  dpi      = 600,
-  bg       = "white"
-)
-
-# 2024 panels
-p24_ff_taxt <- plot_regression(
-  wide24,
-  xcol = "ff",
-  ycol = "taxt",
-  xlab = "FruitFirm® 1000 (g·mm⁻¹)",
-  ylab = "TA.XT Plus (g)",
-  panel_label = "a."
-)
-
-p24_ff_subj <- plot_regression(
-  wide24,
-  xcol = "ff",
-  ycol = "subj_corrected",
-  xlab = "FruitFirm® 1000 (g·mm⁻¹)",
-  ylab = "Subjective rating (1-5)",
-  panel_label = "b."
-)
-
-p24_taxt_subj <- plot_regression(
-  wide24,
-  xcol = "taxt",
-  ycol = "subj_corrected",
-  xlab = "TA.XT Plus (g)",
-  ylab = "Subjective rating (1-5)",
-  panel_label = "c."
-)
-
-regression_grid_2024 <- cowplot::plot_grid(
-  p24_ff_taxt,
-  p24_ff_subj,
-  p24_taxt_subj,
-  nrow = 1,
-  labels = NULL,
-  rel_widths = c(1,1,1)
-)
-print(regression_grid_2024)
-
-ggsave(
-  filename = file.path(out_dir, "Figure_2024_RegressionPanels.png"),
-  plot     = regression_grid_2024,
-  width    = 15,
-  height   = 5.5,
-  dpi      = 600,
-  bg       = "white"
-)
+plot_regression_panels <- function(wide_df, year, outdir) {
+  # Create individual regression plots
+  p1 <- plot_regression(wide_df, "ff", "taxt", "FruitFirm® 1000 (g·mm⁻¹)", "TA.XT Plus (g)", "a.")
+  p2 <- plot_regression(wide_df, "ff", "subj_corrected", "FruitFirm® 1000 (g·mm⁻¹)", "Subjective rating (1-5)", "b.")
+  p3 <- plot_regression(wide_df, "taxt", "subj_corrected", "TA.XT Plus (g)", "Subjective rating (1-5)", "c.")
+  
+  # Combine into a grid
+  grid <- plot_grid(p1, p2, p3, nrow = 1, labels = NULL, rel_widths = c(1, 1, 1))
+  safe_print(grid)  # Print to console
+  
+  # Save the grid
+  f <- file.path(outdir, paste0("Figure_", year, "_RegressionPanels.png"))
+  ggsave(filename = f, plot = grid, width = 15, height = 5.5, dpi = 600, bg = "white")
+  message("Saved: ", normalizePath(f))  # Confirm save
+}
 
 # -------------------------------
-# Run everything for both years
+# Main Execution: Loop Over Years for All Analyses
 # -------------------------------
-analyze_year(dat23, 2023, out_dir)
-analyze_year(dat24, 2024, out_dir)
+years_data <- list("2023" = dat23, "2024" = dat24)  # List of dataframes by year
 
-time_anova_simple(dat23, 2023, out_dir, save_outputs = TRUE)
-time_anova_simple(dat24, 2024, out_dir, save_outputs = TRUE)
+for (year_name in names(years_data)) {  # Loop through each year
+  df <- years_data[[year_name]]  # Get dataframe for the year
+  year_num <- as.numeric(year_name)  # Convert to numeric for functions
+  
+  # Firmness ANOVA by genotype (force ~ seln)
+  fit <- aov(force ~ seln, data = df)  # Fit ANOVA
+  shapiro <- shapiro.test(residuals(fit))  # Normality test
+  levene <- car::leveneTest(force ~ seln, data = df)  # Homogeneity test
+  eta <- effectsize::eta_squared(fit, partial = FALSE)  # Effect size
+  
+  cat("\n--- Firmness ANOVA (", year_name, ") ---\n")  # Print results
+  print(summary(fit))
+  cat("\nShapiro–Wilk p =", shapiro$p.value)
+  cat("\nLevene’s Test p =", levene[1, "Pr(>F)"])
+  print(eta)
+  
+  # Time ANOVA
+  time_anova_simple(df, year_num, out_dir, save_outputs = TRUE)
+  
+  # Generate and save all plots
+  analyze_year(df, year_num, out_dir)
+  
+  # Prepare wide data and plot regressions
+  wide <- prep_wide(df)
+  plot_regression_panels(wide, year_num, out_dir)
+}
 
-cat("\nAll files saved to:\n", normalizePath(out_dir), "\n")
-print(list.files(out_dir, full.names = TRUE))
+# -------------------------------
+# Final Output: List All Saved Files
+# -------------------------------
+cat("\nAll files saved to:\n", normalizePath(out_dir), "\n")  # Directory path
+print(list.files(out_dir, full.names = TRUE))  # List all files in output dir
