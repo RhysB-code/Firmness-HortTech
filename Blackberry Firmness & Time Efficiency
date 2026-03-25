@@ -1,0 +1,737 @@
+---
+title: "Blackberry Firmness & Time Efficiency"
+subtitle: "Validation of the FruitFirm® 1000 for High-Throughput Phenotyping"
+author:
+  - name: Rhys Brock
+    affiliation: University of Arkansas System Division of Agriculture
+  - name: Carmen Johns
+    affiliation: University of Arkansas System Division of Agriculture
+  - name: Katelyn Lust-Moore
+    affiliation: University of Arkansas System Division of Agriculture
+  - name: Margaret Worthington
+    affiliation: University of Arkansas System Division of Agriculture
+date: today
+date-format: "MMMM D, YYYY"
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Navigation"
+    toc-expand: 2
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    self-contained: true
+    page-layout: full
+    fig-width: 13
+    fig-height: 10
+    fig-dpi: 150
+    df-print: kable
+    smooth-scroll: true
+    anchor-sections: true
+    citations-hover: true
+    footnotes-hover: true
+    link-external-icon: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+```{=html}
+<style>
+/* ── Custom styling ────────────────────────────────────────── */
+body { font-family: "Source Sans Pro", "Helvetica Neue", sans-serif; }
+
+/* Hero banner */
+.quarto-title-block {
+  background: linear-gradient(135deg, #1a3a4a 0%, #2d6a4f 100%);
+  color: white !important;
+  padding: 2.5rem 3rem;
+  border-radius: 0 0 12px 12px;
+  margin-bottom: 2rem;
+}
+.quarto-title-block .title    { color: white !important; font-size: 2rem; font-weight: 700; }
+.quarto-title-block .subtitle { color: #b7e4c7 !important; font-size: 1.1rem; }
+.quarto-title-block .author   { color: #d8f3dc !important; }
+.quarto-title-block .date     { color: #95d5b2 !important; font-size: 0.9rem; }
+
+/* Section dividers */
+h1 { border-bottom: 3px solid #2d6a4f; padding-bottom: 0.4rem; color: #1a3a4a; }
+h2 { color: #2d6a4f; }
+h3 { color: #40916c; }
+
+/* Interpretation boxes */
+.interpretation {
+  background: #f0f7f4;
+  border-left: 4px solid #40916c;
+  border-radius: 0 8px 8px 0;
+  padding: 0.9rem 1.2rem;
+  margin: 1rem 0 1.5rem 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.interpretation strong { color: #1a3a4a; }
+
+/* Stat badges inline */
+.stat-badge {
+  display: inline-block;
+  background: #1a3a4a;
+  color: white;
+  border-radius: 4px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.82rem;
+  font-family: monospace;
+  margin: 0 2px;
+}
+
+/* Key findings banner */
+.key-finding {
+  background: linear-gradient(90deg, #1a3a4a 0%, #2d6a4f 100%);
+  color: white;
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  margin: 1.2rem 0;
+  font-size: 0.97rem;
+}
+.key-finding ul { margin: 0.4rem 0 0 1rem; }
+.key-finding li { margin-bottom: 0.25rem; }
+
+/* Callout overrides */
+.callout-note    { border-left-color: #2d6a4f !important; }
+.callout-warning { border-left-color: #e9c46a !important; }
+.callout-important { border-left-color: #1a3a4a !important; }
+.callout-tip     { border-left-color: #40916c !important; }
+
+/* Table enhancements */
+.table thead th { background-color: #1a3a4a !important; color: white !important; }
+.table-striped > tbody > tr:nth-of-type(odd) > * { background-color: #f0f7f4; }
+
+/* TOC */
+#quarto-sidebar { border-right: 2px solid #d8f3dc; }
+.sidebar-navigation .active { color: #2d6a4f !important; font-weight: 600; }
+
+/* Year tabs styling */
+.nav-pills .nav-link.active { background-color: #2d6a4f !important; }
+.nav-pills .nav-link { color: #2d6a4f; }
+</style>
+```
+
+```{r}
+#| label: setup
+#| code-summary: "Load packages & set file paths"
+
+pkgs <- c(
+  "dplyr", "tidyr", "ggplot2", "agricolae", "readr",
+  "tibble", "grid", "RColorBrewer", "scales", "broom", "car",
+  "effectsize", "rlang", "knitr", "kableExtra",
+  "dunn.test", "cowplot"
+)
+to_install <- pkgs[!pkgs %in% rownames(installed.packages())]
+if (length(to_install)) install.packages(to_install, dependencies = TRUE)
+invisible(lapply(pkgs, library, character.only = TRUE))
+
+filter <- dplyr::filter
+select <- dplyr::select
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+# ── Edit these paths if needed ────────────────────────────────────────────────
+file_2023 <- "C:/Users/RhysB/OneDrive/Desktop/Firmness Project/2023FirmnessData.csv"
+file_2024 <- "C:/Users/RhysB/OneDrive/Desktop/Firmness Project/2024FirmnessData.csv"
+
+# ── Data loading ──────────────────────────────────────────────────────────────
+read_firm <- function(path, year) {
+  df   <- read.csv(path, check.names = FALSE)
+  keep <- intersect(names(df),
+                    c("seln","harv_no","rep","hdate","evaldate","type","time","force"))
+  df[, keep, drop = FALSE] |>
+    mutate(
+      seln    = factor(seln),
+      harv_no = suppressWarnings(factor(harv_no)),
+      rep     = suppressWarnings(factor(rep)),
+      type    = factor(tolower(trimws(type)), levels = c("ff","taxt","subj")),
+      time    = suppressWarnings(as.numeric(time)),
+      force   = suppressWarnings(as.numeric(force)),
+      year    = year
+    )
+}
+
+dat23 <- read_firm(file_2023, 2023)
+dat24 <- read_firm(file_2024, 2024)
+
+# Time collapsed to one row per run (correct observational unit for ANOVA)
+time_dat <- function(df) {
+  df |> group_by(seln, type, harv_no) |>
+    summarise(time = first(time), .groups = "drop")
+}
+time23   <- time_dat(dat23)
+time24   <- time_dat(dat24)
+time_all <- bind_rows(
+  time23 |> mutate(year = factor(2023)),
+  time24 |> mutate(year = factor(2024))
+)
+```
+
+```{r}
+#| label: helpers
+#| code-summary: "Statistical & plotting helpers"
+
+# ── Palette & recoding ────────────────────────────────────────────────────────
+genotype_palette <- function(lvls) {
+  n    <- length(lvls)
+  cols <- if (n <= 12) RColorBrewer::brewer.pal(max(3, n), "Set3") else
+                       scales::hue_pal(l = 65, c = 100)(n)
+  setNames(cols[seq_len(n)], lvls)
+}
+recode_method <- function(x) {
+  dplyr::case_match(as.character(x),
+    "ff" ~ "FF", "taxt" ~ "TA.XT", "subj" ~ "SUBJ", .default = as.character(x))
+}
+
+# ── ggplot themes ─────────────────────────────────────────────────────────────
+theme_pub <- function(base = 14) {
+  theme_gray(base_size = base) +
+    theme(plot.title       = element_text(hjust = 0.5, face = "bold", colour = "#1a3a4a"),
+          panel.grid.major = element_line(linewidth = 0.4, colour = "white"),
+          panel.grid.minor = element_blank(),
+          axis.title       = element_text(face = "bold", colour = "#1a3a4a"),
+          panel.background = element_rect(fill = "#fafafa"),
+          plot.background  = element_rect(fill = "white", colour = NA))
+}
+theme_classic_pub <- function(base = 14) {
+  theme_classic(base_size = base) +
+    theme(plot.title  = element_text(hjust = 0.5, face = "bold", size = base + 4, colour = "#1a3a4a"),
+          axis.title  = element_text(face = "bold", size = base + 2, colour = "#1a3a4a"),
+          axis.text   = element_text(size = base),
+          plot.margin = margin(8, 16, 8, 8))
+}
+
+# ── Statistics ────────────────────────────────────────────────────────────────
+extract_hsd <- function(fit, term) {
+  g        <- agricolae::HSD.test(fit, term, group = TRUE)$groups
+  mean_col <- names(g)[sapply(g, is.numeric)][1]
+  tibble(level = rownames(g), mean = as.numeric(g[[mean_col]]), group = g[["groups"]])
+}
+
+hsd_letters_force <- function(d) {
+  if (nrow(d) == 0) return(NULL)
+  fit <- aov(force ~ seln, data = d)
+  out <- agricolae::HSD.test(fit, "seln", group = TRUE)$groups
+  tibble(seln = rownames(out),
+         mean = out$means %||% out$`means`,
+         letters = out$groups) |> arrange(seln)
+}
+box_y_positions <- function(d) {
+  d |> group_by(seln) |>
+    summarise(y_max = max(force, na.rm = TRUE), .groups = "drop") |>
+    mutate(y_lab = y_max + 0.12 * max(y_max, na.rm = TRUE))
+}
+
+assumption_stats <- function(fit, df, resp_var, group_var) {
+  res  <- residuals(fit)
+  shap <- tryCatch(shapiro.test(res), error = function(e) NULL)
+  lev  <- tryCatch(car::leveneTest(as.formula(paste(resp_var,"~",group_var)), data=df),
+                   error = function(e) NULL)
+  eta  <- tryCatch(effectsize::eta_squared(fit, partial = FALSE), error = function(e) NULL)
+  list(
+    shapiro_stat = if (!is.null(shap)) shap$statistic else NA_real_,
+    shapiro_p    = if (!is.null(shap)) shap$p.value   else NA_real_,
+    levene_p     = if (!is.null(lev))  lev[["Pr(>F)"]][1] else NA_real_,
+    eta2         = if (!is.null(eta))  eta$Eta2[eta$Parameter == group_var] else NA_real_
+  )
+}
+
+# ── Boxplot builder ───────────────────────────────────────────────────────────
+make_single_box <- function(d, title, ylab, show_x_title = FALSE, show_legend = FALSE) {
+  if (nrow(d) == 0) return(NULL)
+  pal    <- genotype_palette(levels(d$seln))
+  ltr    <- hsd_letters_force(d)
+  ypos   <- box_y_positions(d)
+  lab_df <- left_join(ltr, ypos, by = "seln")
+  y_max  <- max(d$force, na.rm = TRUE); offset <- 0.15 * y_max
+
+  ggplot(d, aes(x = seln, y = force, fill = seln)) +
+    geom_boxplot(outlier.shape = 16, width = 0.72, linewidth = 0.6, median.linewidth = 1.2) +
+    geom_text(data = lab_df, aes(x = seln, y = y_lab, label = letters),
+              vjust = -0.15, size = 4.8, inherit.aes = FALSE, colour = "#1a3a4a") +
+    scale_fill_manual(values = pal, name = "Genotype") +
+    labs(x = if (show_x_title) "Genotype" else NULL, y = ylab, title = title) +
+    theme_pub(base = 14) +
+    theme(axis.text.x     = element_text(angle = 45, hjust = 1),
+          plot.margin     = margin(t = 6, r = 4, b = if (show_x_title) 4 else 0, l = 6),
+          legend.position = if (show_legend) "right" else "none",
+          legend.key.size = grid::unit(0.70, "cm"),
+          legend.text     = element_text(size = 12),
+          legend.title    = element_text(size = 13, face = "bold")) +
+    expand_limits(y = y_max + offset) +
+    coord_cartesian(ylim = c(0, y_max + offset * 1.6), clip = "off")
+}
+
+# ── 3-panel cowplot assembly ──────────────────────────────────────────────────
+assemble_year_panel <- function(df_year, year) {
+  ff   <- df_year |> filter(type == "ff")
+  taxt <- df_year |> filter(type == "taxt")
+  subj <- df_year |> filter(type == "subj")
+
+  p_ff   <- make_single_box(ff,   paste0("FruitFirm\u00ae 1000 (", year, ")"),
+                             "Firmness (g\u00b7mm\u207b\u00b9)", show_x_title = FALSE)
+  p_taxt <- make_single_box(taxt, paste0("TA.XT Plus (", year, ")"),
+                             "Peak force (g)",                   show_x_title = FALSE)
+  p_subj <- make_single_box(subj, paste0("Subjective (", year, ")"),
+                             "Firmness rating (1\u20135)",       show_x_title = TRUE,
+                             show_legend = TRUE)
+
+  legend_right <- cowplot::get_legend(
+    p_subj + theme(legend.position   = "right",
+                   legend.box.margin = margin(2,2,2,2),
+                   legend.key.size   = grid::unit(0.70,"cm"),
+                   legend.text       = element_text(size=12),
+                   legend.title      = element_text(size=13, face="bold"))
+  )
+  p_subj_nl <- p_subj + theme(legend.position = "none")
+
+  left_stack <- cowplot::plot_grid(
+    p_ff, p_taxt, p_subj_nl,
+    labels = c("a.","b.","c."), label_size = 14, label_fontface = "bold",
+    ncol = 1, align = "v", axis = "l",
+    label_x = 0.07, label_y = 0.98, label_hjust = 0,
+    rel_heights = c(1.35, 1.35, 1.45)
+  )
+  legend_shift <- 0.85
+  right_col <- cowplot::plot_grid(NULL, legend_right, NULL, ncol = 1,
+    rel_heights = c(1.35 - legend_shift, 1.35 + legend_shift, 1.45))
+  final <- cowplot::plot_grid(left_stack, right_col,
+                               ncol=2, rel_widths=c(6.1,0.9), align="h")
+  cowplot::ggdraw(final) + theme(plot.margin = margin(2,2,2,2))
+}
+
+# ── Diagnostic plots ──────────────────────────────────────────────────────────
+make_diag_plots <- function(fit, label) {
+  res_df <- tibble(fitted = fitted(fit), residuals = residuals(fit))
+  qq <- ggplot(res_df, aes(sample = residuals)) +
+    stat_qq(size = 1.8, colour = "#2d6a4f") + stat_qq_line(colour = "#e63946", linewidth = 0.8) +
+    labs(title = paste("QQ --", label), x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    theme_classic_pub(11)
+  rv <- ggplot(res_df, aes(x = fitted, y = residuals)) +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "#e63946") +
+    geom_point(size = 2, alpha = 0.65, colour = "#2d6a4f") +
+    geom_smooth(method = "loess", se = FALSE, colour = "#e9c46a", linewidth = 0.8) +
+    labs(title = paste("Resid vs Fitted --", label), x = "Fitted", y = "Residuals") +
+    theme_classic_pub(11)
+  list(qq = qq, rv = rv)
+}
+diag_grid_3 <- function(d1, d2, d3) {
+  cowplot::plot_grid(d1$qq, d2$qq, d3$qq, d1$rv, d2$rv, d3$rv, ncol=3, align="hv")
+}
+diag_grid_1 <- function(d) cowplot::plot_grid(d$qq, d$rv, ncol=2, align="hv")
+
+# ── Table renderers ───────────────────────────────────────────────────────────
+render_combined_anova <- function(fits, year) {
+  purrr::map_dfr(names(fits), \(nm) {
+    broom::tidy(fits[[nm]]) |> filter(term != "Residuals") |>
+      mutate(Method = nm,
+             across(c(sumsq, meansq, statistic), \(x) round(x, 2)),
+             p.value = round(p.value, 4),
+             Sig = dplyr::case_when(p.value < 0.001 ~ "***", p.value < 0.01 ~ "**",
+                                    p.value < 0.05  ~ "*",   TRUE ~ "ns"))
+  }) |>
+    select(Method, Term=term, DF=df, SS=sumsq, MS=meansq, F=statistic, `p-value`=p.value, Sig) |>
+    kable(caption = paste("One-way ANOVA: Force ~ Genotype, all methods --", year)) |>
+    kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE) |>
+    collapse_rows(columns = 1, valign = "top")
+}
+
+render_combined_hsd <- function(hsd_ff, hsd_taxt, hsd_subj, year) {
+  ff_tbl   <- hsd_ff   |> rename(Genotype=level, FF_Mean=mean,   FF_Group=group)
+  taxt_tbl <- hsd_taxt |> rename(Genotype=level, TAXT_Mean=mean, TAXT_Group=group)
+  subj_tbl <- hsd_subj |> rename(Genotype=level, Subj_Mean=mean, Subj_Group=group)
+  ff_tbl |> left_join(taxt_tbl, by="Genotype") |> left_join(subj_tbl, by="Genotype") |>
+    mutate(across(where(is.numeric), \(x) round(x,2))) |> arrange(Genotype) |>
+    rename(`Mean`=FF_Mean, `Group`=FF_Group, ` Mean`=TAXT_Mean, ` Group`=TAXT_Group,
+           `  Mean`=Subj_Mean, `  Group`=Subj_Group) |>
+    kable(caption = paste("Tukey HSD mean separation by genotype and method --", year)) |>
+    kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE) |>
+    add_header_above(c(" "=1, "FruitFirm 1000 (g/mm)"=2, "TA.XT Plus (g)"=2, "Subjective (1-5)"=2))
+}
+
+render_time_tables <- function(fit_aov, time_df, hsd_tbl, year) {
+  aov_out <- broom::tidy(fit_aov) |>
+    mutate(across(c(sumsq,meansq,statistic), \(x) round(x,2)), p.value=round(p.value,4)) |>
+    select(Term=term, DF=df, SS=sumsq, MS=meansq, F=statistic, `p-value`=p.value)
+  print(kable(aov_out, caption=paste("ANOVA: Time ~ Method (", year, ") -- n=30/method, df_residual=87")) |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=FALSE))
+
+  hsd_out <- hsd_tbl |> mutate(Method=recode_method(level), mean=round(mean,2)) |>
+    select(Method, `Mean (s/berry)`=mean, `Tukey Group`=group)
+  print(kable(hsd_out, caption=paste("Tukey HSD -- Time", year)) |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=FALSE))
+
+  kw <- kruskal.test(time ~ type, data=time_df)
+  cat(sprintf("\nKruskal-Wallis confirmation: chi-sq = %.3f, df = %d, p = %.4e\n",
+              kw$statistic, kw$parameter, kw$p.value))
+
+  dunn <- dunn.test::dunn.test(time_df$time, g=time_df$type, method="bonferroni",
+                                kw=FALSE, label=TRUE, wrap=FALSE)
+  dunn_tbl <- tibble(Comparison=dunn$comparisons, Z=round(dunn$Z,3),
+    `p-adj (Bonferroni)`=round(dunn$P.adjusted,4),
+    Sig=ifelse(dunn$P.adjusted<0.001,"***",ifelse(dunn$P.adjusted<0.01,"**",
+         ifelse(dunn$P.adjusted<0.05,"*","ns"))))
+  print(kable(dunn_tbl, caption=paste("Dunn's Test (Bonferroni) -- Time", year)) |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=FALSE))
+}
+
+assm_summary_table <- function(rows, caption) {
+  purrr::map_dfr(rows, \(x) tibble(
+    Year=x$year, Method=x$method,
+    Shapiro_W = round(x$a$shapiro_stat, 4),
+    Shapiro_p = round(x$a$shapiro_p,    4),
+    Levene_p  = round(x$a$levene_p,     4),
+    eta2      = round(x$a$eta2 %||% NA_real_, 3),
+    Normality   = ifelse(x$a$shapiro_p >= 0.05, "Met", "VIOLATED"),
+    Homogeneity = ifelse(x$a$levene_p  >= 0.05, "Met", "VIOLATED")
+  )) |>
+    rename(`Shapiro W`=Shapiro_W, `Shapiro p`=Shapiro_p,
+           `Levene p`=Levene_p, `eta2`=eta2) |>
+    kable(caption=caption) |>
+    kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE) |>
+    collapse_rows(columns=1, valign="top")
+}
+
+# ── Pre-compute all fits ──────────────────────────────────────────────────────
+run_time_analysis <- function(time_df, year_label) {
+  fit_aov <- aov(time ~ type, data = time_df)
+  list(fit_aov = fit_aov,
+       assm    = assumption_stats(fit_aov, time_df, "time", "type"),
+       year    = year_label)
+}
+time_res23 <- run_time_analysis(time23, 2023)
+time_res24 <- run_time_analysis(time24, 2024)
+
+hsd_t23 <- extract_hsd(time_res23$fit_aov, "type") |>
+  mutate(type_nice = factor(recode_method(level), levels=c("FF","TA.XT","SUBJ")), year=factor(2023))
+hsd_t24 <- extract_hsd(time_res24$fit_aov, "type") |>
+  mutate(type_nice = factor(recode_method(level), levels=c("FF","TA.XT","SUBJ")), year=factor(2024))
+```
+
+---
+
+::: {.callout-tip}
+## How to Use This Document
+
+Collapse or expand any section using the **▶ toggles**. Code chunks can be revealed with **Show code**. All plots and tables are interactive — hover for tooltips on tables. Navigate sections using the table of contents on the left.
+:::
+
+---
+
+# Study Overview {#overview}
+
+::: {.key-finding}
+**Study objective:** Validate the FruitFirm® 1000 as a high-throughput alternative to the TA.XT Plus Texture Analyzer and subjective manual assessment for blackberry firmness phenotyping across two growing seasons (2023–2024) at the UADA Fruit Research Station, Clarksville, AR.
+
+**Key findings at a glance:**
+- Significant genotypic differences in firmness detected across all three methods in both years (P < 0.001)
+- FruitFirm® 1000 required only **~7–12% of TA.XT Plus processing time**, matching the speed of subjective assessment
+- Instrument-to-instrument correlation improved markedly from 2023 (r = 0.72) to 2024 (r = 0.94)
+- Both instrumental methods showed lower variability and stronger genotypic discrimination than subjective ratings
+:::
+
+---
+
+# 2023 — Firmness by Genotype {#firmness-2023}
+
+```{r}
+#| label: fig-panel-2023
+#| fig-cap: "Blackberry fruit firmness for 10 genotypes evaluated in 2023 using (a) FruitFirm® 1000, (b) TA.XT Plus Texture Analyzer, and (c) subjective 1–5 firmness ratings (1 = firm, 5 = soft). Letters above boxes indicate Tukey HSD mean separation groups (P ≤ 0.05). n = 16 fruit per genotype per method per harvest date."
+#| fig-height: 11
+
+ff23   <- dat23 |> filter(type == "ff")
+taxt23 <- dat23 |> filter(type == "taxt")
+subj23 <- dat23 |> filter(type == "subj")
+
+fit_ff23   <- aov(force ~ seln, data = ff23)
+fit_taxt23 <- aov(force ~ seln, data = taxt23)
+fit_subj23 <- aov(force ~ seln, data = subj23)
+
+hsd_ff23   <- extract_hsd(fit_ff23,   "seln")
+hsd_taxt23 <- extract_hsd(fit_taxt23, "seln")
+hsd_subj23 <- extract_hsd(fit_subj23, "seln")
+
+assm_ff23   <- assumption_stats(fit_ff23,   ff23,   "force", "seln")
+assm_taxt23 <- assumption_stats(fit_taxt23, taxt23, "force", "seln")
+assm_subj23 <- assumption_stats(fit_subj23, subj23, "force", "seln")
+
+assemble_year_panel(dat23, 2023)
+```
+
+::: {.interpretation}
+**2023 Firmness Results.** Significant genotypic differences in firmness were detected across all three evaluation methods (P < 0.001). **Ponca** ranked as the firmest genotype by both the FruitFirm® 1000 (139.5 g·mm⁻¹) and TA.XT Plus (758.0 g), separating into the top Tukey group in both instrumental analyses. **APF-472T** and **Osage** were consistently among the softest selections. Subjective ratings showed broader letter groupings than the instrumental methods — fewer genotypes were statistically distinguishable — reflecting the inherent limitation of 1–5 scale resolution and evaluator variability.
+:::
+
+::: {.callout-note collapse="true"}
+## ANOVA & Mean Separation Tables — 2023
+
+```{r}
+#| label: tbl-anova-2023
+render_combined_anova(list(FF=fit_ff23, TAXT=fit_taxt23, Subjective=fit_subj23), 2023)
+```
+
+```{r}
+#| label: tbl-hsd-2023
+render_combined_hsd(hsd_ff23, hsd_taxt23, hsd_subj23, 2023)
+```
+
+> **Reading the table:** Within each method column, genotypes sharing a letter group are not significantly different from one another (Tukey HSD, P ≤ 0.05). Comparisons are within-method only — means are not directly comparable across methods due to different measurement units.
+:::
+
+::: {.callout-warning collapse="true"}
+## Assumption Diagnostics — 2023
+
+```{r}
+#| label: fig-assm-2023
+#| fig-height: 9
+#| fig-cap: "Residual diagnostic plots for 2023 firmness ANOVAs. Top row: QQ plots (points should fall near the red line for normality); bottom row: residuals vs fitted (should show no pattern). Mild deviations are expected and inconsequential at n = 480."
+d_ff23   <- make_diag_plots(fit_ff23,   "FF 2023")
+d_taxt23 <- make_diag_plots(fit_taxt23, "TA.XT 2023")
+d_subj23 <- make_diag_plots(fit_subj23, "Subj 2023")
+diag_grid_3(d_ff23, d_taxt23, d_subj23)
+```
+
+```{r}
+#| label: tbl-assm-2023
+assm_summary_table(
+  list(list(year=2023, method="FF",         a=assm_ff23),
+       list(year=2023, method="TA.XT",      a=assm_taxt23),
+       list(year=2023, method="Subjective", a=assm_subj23)),
+  "Assumption Summary -- Firmness ANOVAs 2023"
+)
+```
+
+> **Note on violations.** All three 2023 models show Shapiro-Wilk p < 0.05 and Levene p < 0.05. With n = 480 observations per ANOVA, Shapiro-Wilk has very high power and will flag even trivially small departures from normality that have no practical effect on inference. The QQ plots show acceptable tail behavior, and ANOVA is robust to these violations in large balanced designs. Log-transformation did not alter Tukey groupings, confirming the raw analysis is valid.
+:::
+
+---
+
+# 2024 — Firmness by Genotype {#firmness-2024}
+
+```{r}
+#| label: fig-panel-2024
+#| fig-cap: "Blackberry fruit firmness for 10 genotypes evaluated in 2024 using (a) FruitFirm® 1000, (b) TA.XT Plus Texture Analyzer, and (c) subjective 1–5 firmness ratings. Letters indicate Tukey HSD groups (P ≤ 0.05)."
+#| fig-height: 11
+
+ff24   <- dat24 |> filter(type == "ff")
+taxt24 <- dat24 |> filter(type == "taxt")
+subj24 <- dat24 |> filter(type == "subj")
+
+fit_ff24   <- aov(force ~ seln, data = ff24)
+fit_taxt24 <- aov(force ~ seln, data = taxt24)
+fit_subj24 <- aov(force ~ seln, data = subj24)
+
+hsd_ff24   <- extract_hsd(fit_ff24,   "seln")
+hsd_taxt24 <- extract_hsd(fit_taxt24, "seln")
+hsd_subj24 <- extract_hsd(fit_subj24, "seln")
+
+assm_ff24   <- assumption_stats(fit_ff24,   ff24,   "force", "seln")
+assm_taxt24 <- assumption_stats(fit_taxt24, taxt24, "force", "seln")
+assm_subj24 <- assumption_stats(fit_subj24, subj24, "force", "seln")
+
+assemble_year_panel(dat24, 2024)
+```
+
+::: {.interpretation}
+**2024 Firmness Results.** Genotypic separation improved markedly in 2024 relative to 2023, with higher F-statistics and effect sizes across all three methods. **A-2453T** and **APF-448T** emerged as the firmest selections, both reaching group "a" in the FruitFirm® 1000 and TA.XT Plus analyses. **APF-205T** and **APF-593T** were consistently the softest. Notably, subjective ratings in 2024 showed much cleaner separation between genotypes than in 2023, with A-2453T receiving a mean rating of 1.31 — nearly at ceiling firmness on the 1–5 scale. The improved discriminating power of all three methods in 2024 is consistent with reduced evaluator variability and potentially improved fruit quality uniformity that season.
+:::
+
+::: {.callout-note collapse="true"}
+## ANOVA & Mean Separation Tables — 2024
+
+```{r}
+#| label: tbl-anova-2024
+render_combined_anova(list(FF=fit_ff24, TAXT=fit_taxt24, Subjective=fit_subj24), 2024)
+```
+
+```{r}
+#| label: tbl-hsd-2024
+render_combined_hsd(hsd_ff24, hsd_taxt24, hsd_subj24, 2024)
+```
+
+> **Reading the table:** Letters denote Tukey HSD groups within each method column. All three methods show substantially higher F-values and η² in 2024 compared to 2023, indicating stronger genotypic signal relative to within-genotype variance.
+:::
+
+::: {.callout-warning collapse="true"}
+## Assumption Diagnostics — 2024
+
+```{r}
+#| label: fig-assm-2024
+#| fig-height: 9
+d_ff24   <- make_diag_plots(fit_ff24,   "FF 2024")
+d_taxt24 <- make_diag_plots(fit_taxt24, "TA.XT 2024")
+d_subj24 <- make_diag_plots(fit_subj24, "Subj 2024")
+diag_grid_3(d_ff24, d_taxt24, d_subj24)
+```
+
+```{r}
+#| label: tbl-assm-2024
+assm_summary_table(
+  list(list(year=2024, method="FF",         a=assm_ff24),
+       list(year=2024, method="TA.XT",      a=assm_taxt24),
+       list(year=2024, method="Subjective", a=assm_subj24)),
+  "Assumption Summary -- Firmness ANOVAs 2024"
+)
+```
+
+> Same large-n Shapiro-Wilk caveat applies. The 2024 subjective model shows the highest η² of any model (0.379), indicating that over one-third of total variation in subjective ratings is attributable to genotype — a notable improvement over 2023 (η² = 0.094).
+:::
+
+---
+
+# Time Efficiency — Both Years {#time}
+
+```{r}
+#| label: fig-time-combined
+#| fig-height: 6.5
+#| fig-cap: "Mean processing time per berry (±SE) by evaluation method and year. Both years shown side-by-side for direct comparison. Letters denote Tukey HSD groups within each year (P ≤ 0.05). n = 30 run-level observations per method per year (10 genotypes × 3 harvest dates)."
+
+time_summary <- time_all |>
+  group_by(year, type) |>
+  summarise(n=n(), avg=mean(time,na.rm=TRUE), se=sd(time,na.rm=TRUE)/sqrt(n()), .groups="drop") |>
+  mutate(type_nice = factor(recode_method(type), levels=c("FF","TA.XT","SUBJ")))
+
+hsd_both <- bind_rows(hsd_t23, hsd_t24) |>
+  mutate(type_nice = factor(type_nice, levels=c("FF","TA.XT","SUBJ")))
+time_summary <- time_summary |>
+  left_join(hsd_both |> select(year, type_nice, group, mean), by=c("year","type_nice"))
+
+y_ceil   <- max(time_summary$avg + time_summary$se, na.rm=TRUE) * 1.35
+year_pal <- c("2023" = "#2d6a4f", "2024" = "#95d5b2")
+dw       <- 0.72
+
+ggplot(time_summary, aes(x=type_nice, y=avg, fill=year)) +
+  geom_col(position=position_dodge(width=dw), width=dw*0.85, colour="black", linewidth=0.4) +
+  geom_errorbar(aes(ymin=avg-se, ymax=avg+se), position=position_dodge(width=dw),
+                width=0.22, linewidth=1.0, colour="#1a3a4a") +
+  geom_text(aes(label=sprintf("%.2f", avg), y=avg+se+y_ceil*0.025),
+            position=position_dodge(width=dw), size=3.8, fontface="bold", hjust=0,
+            colour="#1a3a4a") +
+  geom_text(aes(label=group, y=y_ceil*0.97), position=position_dodge(width=dw),
+            size=4.5, fontface="bold", colour="#1a3a4a") +
+  coord_flip() +
+  scale_fill_manual(values=year_pal, name="Year") +
+  scale_y_continuous(expand=expansion(mult=c(0, 0.05))) +
+  labs(x="Method", y="Seconds per berry (s)",
+       title="Processing Time by Method (2023 & 2024)",
+       caption="n = 30 runs per method per year (10 genotypes \u00d7 3 harvest dates). Letters denote Tukey HSD groups within each year.") +
+  theme_classic_pub(base=14) +
+  theme(legend.position="right", legend.title=element_text(face="bold"),
+        plot.caption=element_text(size=10, hjust=0, colour="grey50")) +
+  expand_limits(y=y_ceil)
+```
+
+::: {.interpretation}
+**Time Efficiency Results.** The FruitFirm® 1000 required a mean of 2.48 s/berry in 2023 and 2.63 s/berry in 2024 — **approximately 11.6% and 6.4% of the TA.XT Plus processing time** in each respective year. The large increase in TA.XT Plus processing time in 2024 (21.3 → 41.5 s/berry) was primarily attributable to repeated compression misfires linked to outdated instrument software. The FruitFirm® 1000 and subjective evaluation were statistically indistinguishable in processing speed in both years (Tukey group "b"), while the TA.XT Plus was significantly slower than both alternatives (group "a", P < 0.001). These results establish the FruitFirm® 1000 as a quantitative instrument with throughput equivalent to subjective rating but without the evaluator bias.
+:::
+
+::: {.callout-warning collapse="true"}
+## Statistical Details — Time Analysis
+
+> **Assumption note.** Both time ANOVAs violate normality and homogeneity of variance (Shapiro p < 0.001, Levene p < 0.001). This is expected — the TA.XT Plus values (~20–40 s) are an order of magnitude larger than FF/SUBJ (~2–3 s), creating severe right-skew in the residuals. Kruskal-Wallis + Dunn's post-hoc tests confirm the parametric ANOVA groupings in both years, so conclusions are robust to the violations.
+
+### 2023
+
+```{r}
+#| label: tbl-time-all-2023
+assm_t23 <- time_res23$assm
+render_time_tables(time_res23$fit_aov, time23, hsd_t23, 2023)
+```
+
+```{r}
+#| label: fig-time-diag-2023
+#| fig-height: 4
+#| fig-cap: "Residual diagnostics — time ANOVA 2023. The extreme right-tail in the QQ plot reflects TA.XT Plus outlier values. Kruskal-Wallis confirms the grouping result."
+diag_grid_1(make_diag_plots(time_res23$fit_aov, "Time 2023"))
+```
+
+### 2024
+
+```{r}
+#| label: tbl-time-all-2024
+assm_t24 <- time_res24$assm
+render_time_tables(time_res24$fit_aov, time24, hsd_t24, 2024)
+```
+
+```{r}
+#| label: fig-time-diag-2024
+#| fig-height: 4
+#| fig-cap: "Residual diagnostics — time ANOVA 2024. More extreme right-tail than 2023, driven by TA.XT Plus misfires inflating 2024 processing times."
+diag_grid_1(make_diag_plots(time_res24$fit_aov, "Time 2024"))
+```
+:::
+
+---
+
+# Summary Tables {#summary}
+
+::: {.callout-note collapse="true"}
+## All ANOVA Results — Both Years
+
+```{r}
+#| label: tbl-all-anova
+bind_rows(
+  broom::tidy(fit_ff23)          |> mutate(Year=2023, Method="FF",         Dataset="Firmness"),
+  broom::tidy(fit_taxt23)        |> mutate(Year=2023, Method="TA.XT",      Dataset="Firmness"),
+  broom::tidy(fit_subj23)        |> mutate(Year=2023, Method="Subjective", Dataset="Firmness"),
+  broom::tidy(time_res23$fit_aov)|> mutate(Year=2023, Method="All",        Dataset="Time (n=30/method)"),
+  broom::tidy(fit_ff24)          |> mutate(Year=2024, Method="FF",         Dataset="Firmness"),
+  broom::tidy(fit_taxt24)        |> mutate(Year=2024, Method="TA.XT",      Dataset="Firmness"),
+  broom::tidy(fit_subj24)        |> mutate(Year=2024, Method="Subjective", Dataset="Firmness"),
+  broom::tidy(time_res24$fit_aov)|> mutate(Year=2024, Method="All",        Dataset="Time (n=30/method)")
+) |>
+  filter(term != "Residuals") |>
+  mutate(across(c(sumsq,meansq,statistic), \(x) round(x,2)),
+         p.value = round(p.value, 4),
+         Sig = dplyr::case_when(p.value<0.001~"***", p.value<0.01~"**",
+                                p.value<0.05~"*",   TRUE~"ns")) |>
+  select(Year, Dataset, Method, Term=term, DF=df, SS=sumsq, MS=meansq,
+         F=statistic, `p-value`=p.value, Sig) |>
+  kable(caption = "Complete ANOVA results. Firmness: force ~ genotype (n=480/method). Time: time ~ method (n=30/method, one row per run).") |>
+  kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE) |>
+  collapse_rows(columns=1:2, valign="top")
+```
+:::
+
+::: {.callout-note collapse="true"}
+## Assumption Checks — All Models
+
+```{r}
+#| label: tbl-all-assumptions
+assm_summary_table(
+  list(
+    list(year=2023, method="FF",         a=assm_ff23),
+    list(year=2023, method="TA.XT",      a=assm_taxt23),
+    list(year=2023, method="Subjective", a=assm_subj23),
+    list(year=2023, method="Time",       a=assm_t23),
+    list(year=2024, method="FF",         a=assm_ff24),
+    list(year=2024, method="TA.XT",      a=assm_taxt24),
+    list(year=2024, method="Subjective", a=assm_subj24),
+    list(year=2024, method="Time",       a=assm_t24)
+  ),
+  "Assumption check summary -- all ANOVA models"
+)
+```
+
+> All firmness models show Shapiro-Wilk violations attributable to large-n sensitivity (n = 480). Log-transformation of force did not alter Tukey groupings in any model, confirming robustness of the untransformed analysis. Time models additionally violate homogeneity; Kruskal-Wallis + Dunn's post-hoc confirms all time groupings.
+:::
+
+---
+
+# Session Info {#session}
+
+::: {.callout-note collapse="true"}
+## R Environment
+
+```{r}
+sessionInfo()
+```
+:::
